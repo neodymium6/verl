@@ -16,34 +16,41 @@
 
 def compute_score(solution_str, ground_truth) -> float:
     retval = 0.0
+    answer = "[INVALID]"
     try:
         string_in_last_boxed = last_boxed_only_string(solution_str)
         if string_in_last_boxed is not None:
             answer = remove_boxed(string_in_last_boxed)
-            if is_equiv(answer, ground_truth):
+            is_eq, answer, ground_truth = is_equiv(answer, ground_truth)
+            if is_eq:
                 retval = 1.0
     except Exception as e:
         print(e)
 
-    return retval
+    # return retval
+    return {
+        "score": retval,
+        "acc": retval == 1.0,
+        "pred": answer,
+    }
 
 
 # string normalization from https://github.com/EleutherAI/lm-evaluation-harness/blob/master/lm_eval/tasks/hendrycks_math.py
-def is_equiv(str1, str2, verbose=False):
+def is_equiv(str1, str2, verbose=False) -> tuple[bool, str, str]:
     if str1 is None and str2 is None:
         print("WARNING: Both None")
-        return True
+        return True, str1, str2
     if str1 is None or str2 is None:
-        return False
+        return False, str1, str2
 
     try:
         ss1 = strip_string(str1)
         ss2 = strip_string(str2)
         if verbose:
             print(ss1, ss2)
-        return ss1 == ss2
+        return ss1 == ss2, ss1, ss2
     except Exception:
-        return str1 == str2
+        return str1 == str2, str1, str2
 
 
 def remove_boxed(s):
