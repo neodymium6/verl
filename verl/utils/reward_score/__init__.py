@@ -59,6 +59,12 @@ def default_compute_score(
         from . import math_dapo
 
         res = math_dapo.compute_score(solution_str, ground_truth)
+    elif data_source == "math_dapo01":
+        from . import math_dapo
+
+        res = math_dapo.compute_score(solution_str, ground_truth)
+        # Convert score to binary: (1.0, -1.0) -> (1.0, 0.0)
+        res["score"] = 1.0 if res["score"] == 1.0 else 0.0
     elif data_source in [
         "numina_aops_forum",
         "numina_synthetic_math",
