@@ -106,6 +106,7 @@ class RayDAPOTrainer(RayPPOTrainer):
 
         timing_raw = defaultdict(float)
         batch = None
+        reward_extra_infos_dict = None
         num_prompt_in_batch = 0
         num_gen_batches = 0
         for epoch in range(self.config.trainer.total_epochs):
@@ -176,23 +177,53 @@ class RayDAPOTrainer(RayPPOTrainer):
                             new_batch = new_batch.union(reward_tensor)
 
                         # we combine with rule-based rm
-                        reward_extra_infos_dict: dict[str, list]
+                        new_reward_extra_infos_dict: dict[str, list]
                         try:
                             reward_result = self.reward_fn(new_batch, return_dict=True)
                             reward_tensor = reward_result["reward_tensor"]
-                            reward_extra_infos_dict = reward_result.get("reward_extra_info", {})
+                            new_reward_extra_infos_dict = reward_result.get("reward_extra_info", {})
                         except Exception as e:
                             print(f"Error in reward_fn: {e}")
                             reward_tensor = self.reward_fn(new_batch)
-                            reward_extra_infos_dict = {}
+                            new_reward_extra_infos_dict = {}
 
                         new_batch.batch["token_level_scores"] = reward_tensor
 
-                        if reward_extra_infos_dict:
+                        if new_reward_extra_infos_dict:
                             new_batch.non_tensor_batch.update(
-                                {k: np.array(v) for k, v in reward_extra_infos_dict.items()}
+                                {k: np.array(v) for k, v in new_reward_extra_infos_dict.items()}
                             )
 
+                        # Save unfiltered (raw) generation data if enabled
+                        rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
+                        if rollout_data_dir:
+                            import time
+
+                            timestamp = int(time.time() * 1000) % 100000  # 5-digit timestamp
+                            with marked_timer("dump_unfiltered_generations", timing_raw, "green"):
+                                inputs_raw = self.tokenizer.batch_decode(
+                                    new_batch.batch["prompts"], skip_special_tokens=True
+                                )
+                                outputs_raw = self.tokenizer.batch_decode(
+                                    new_batch.batch["responses"], skip_special_tokens=True
+                                )
+                                out_tokens_raw = new_batch.batch["responses"].cpu().tolist()
+                                sample_gts = [
+                                    item.non_tensor_batch.get("reward_model", {}).get("ground_truth", None)
+                                    for item in new_batch
+                                ]
+                                scores_raw = new_batch.batch["token_level_scores"].sum(-1).cpu().tolist()
+
+                                self._dump_generations(
+                                    inputs=inputs_raw,
+                                    outputs=outputs_raw,
+                                    output_ids=out_tokens_raw,
+                                    gts=sample_gts,
+                                    scores=scores_raw,
+                                    reward_extra_infos_dict=new_reward_extra_infos_dict,
+                                    dump_path=f"{rollout_data_dir}/raw",
+                                    filename_suffix=str(timestamp),
+                                )
                         # compute rewards. apply_kl_penalty if available
                         if self.config.algorithm.use_kl_in_reward:
                             new_batch, kl_metrics = apply_kl_penalty(
@@ -206,6 +237,7 @@ class RayDAPOTrainer(RayPPOTrainer):
 
                     if not self.config.algorithm.filter_groups.enable:
                         batch = new_batch
+                        reward_extra_infos_dict = new_reward_extra_infos_dict
                     else:  # NOTE: When prompts after filtering is less than train batch size,
                         # we skip to the next generation batch
                         metric_name = self.config.algorithm.filter_groups.metric
@@ -244,6 +276,14 @@ class RayDAPOTrainer(RayPPOTrainer):
 
                         new_batch = new_batch[kept_traj_idxs]
                         batch = new_batch if batch is None else DataProto.concat([batch, new_batch])
+                        new_reward_extra_infos_dict = {
+                            k: [v[i] for i in kept_traj_idxs] for k, v in new_reward_extra_infos_dict.items()
+                        }
+                        reward_extra_infos_dict = (
+                            new_reward_extra_infos_dict
+                            if reward_extra_infos_dict is None
+                            else {k: reward_extra_infos_dict[k] + v for k, v in new_reward_extra_infos_dict.items()}
+                        )
 
                         prompt_bsz = self.config.data.train_batch_size
                         if num_prompt_in_batch < prompt_bsz:
@@ -265,7 +305,30 @@ class RayDAPOTrainer(RayPPOTrainer):
                             # Align the batch
                             traj_bsz = self.config.data.train_batch_size * self.config.actor_rollout_ref.rollout.n
                             batch = batch[:traj_bsz]
+                            for k in reward_extra_infos_dict.keys():
+                                reward_extra_infos_dict[k] = reward_extra_infos_dict[k][:traj_bsz]
 
+                    rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
+                    if rollout_data_dir:
+                        with marked_timer("dump_rollout_generations", timing_raw, "green"):
+                            inputs = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=True)
+                            outputs = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
+                            out_tokens = batch.batch["responses"].cpu().tolist()
+                            sample_gts = [
+                                item.non_tensor_batch.get("reward_model", {}).get("ground_truth", None)
+                                for item in batch
+                            ]
+                            scores = batch.batch["token_level_scores"].sum(-1).cpu().tolist()
+
+                            self._dump_generations(
+                                inputs=inputs,
+                                outputs=outputs,
+                                output_ids=out_tokens,
+                                gts=sample_gts,
+                                scores=scores,
+                                reward_extra_infos_dict=reward_extra_infos_dict,
+                                dump_path=rollout_data_dir,
+                            )
                     # === Updating ===
 
                     batch.batch["response_mask"] = compute_response_mask(batch)
@@ -374,6 +437,7 @@ class RayDAPOTrainer(RayPPOTrainer):
 
                 metrics["train/num_gen_batches"] = num_gen_batches
                 batch = None
+                reward_extra_infos_dict = None
                 num_prompt_in_batch = 0
                 num_gen_batches = 0
 

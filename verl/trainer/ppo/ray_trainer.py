@@ -427,15 +427,29 @@ class RayPPOTrainer:
         except Exception as e:
             print(f"Warning: Could not set total_training_steps in config. Structure missing? Error: {e}")
 
-    def _dump_generations(self, inputs, outputs, gts, scores, reward_extra_infos_dict, dump_path):
+    def _dump_generations(
+        self,
+        inputs,
+        outputs,
+        output_ids,
+        gts,
+        scores,
+        reward_extra_infos_dict,
+        dump_path,
+        filename_suffix=None,
+    ):
         """Dump rollout/validation samples as JSONL."""
         os.makedirs(dump_path, exist_ok=True)
-        filename = os.path.join(dump_path, f"{self.global_steps}.jsonl")
+        if filename_suffix is None:
+            filename = os.path.join(dump_path, f"{self.global_steps}.jsonl")
+        else:
+            filename = os.path.join(dump_path, f"{self.global_steps}_{filename_suffix}.jsonl")
 
         n = len(inputs)
         base_data = {
             "input": inputs,
             "output": outputs,
+            "output_ids": output_ids,
             "gts": gts,
             "score": scores,
             "step": [self.global_steps] * n,
@@ -447,7 +461,7 @@ class RayPPOTrainer:
 
         lines = []
         for i in range(n):
-            entry = {k: v[i] for k, v in base_data.items()}
+            entry = {k: v[i] if not hasattr(v[i], "item") else v[i].item() for k, v in base_data.items()}
             lines.append(json.dumps(entry, ensure_ascii=False))
 
         with open(filename, "w") as f:
@@ -503,6 +517,7 @@ class RayPPOTrainer:
         # Lists to collect samples for the table
         sample_inputs = []
         sample_outputs = []
+        sample_out_ids = []
         sample_gts = []
         sample_scores = []
         sample_turns = []
@@ -569,6 +584,7 @@ class RayPPOTrainer:
             output_ids = test_output_gen_batch.batch["responses"]
             output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
             sample_outputs.extend(output_texts)
+            sample_out_ids.extend(output_ids.cpu().tolist())
 
             test_batch = test_batch.union(test_output_gen_batch)
             test_batch.meta_info["validate"] = True
@@ -602,6 +618,7 @@ class RayPPOTrainer:
             self._dump_generations(
                 inputs=sample_inputs,
                 outputs=sample_outputs,
+                output_ids=sample_out_ids,
                 gts=sample_gts,
                 scores=sample_scores,
                 reward_extra_infos_dict=reward_extra_infos_dict,
