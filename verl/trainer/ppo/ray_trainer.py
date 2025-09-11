@@ -586,6 +586,11 @@ class RayPPOTrainer:
             sample_outputs.extend(output_texts)
             sample_out_ids.extend(output_ids.cpu().tolist())
 
+            response_length = output_ids.shape[-1]
+            response_mask = test_output_gen_batch.batch["attention_mask"][:, -response_length:]
+            response_lengths = response_mask.sum(-1).float().cpu().tolist()
+            reward_extra_infos_dict["response_length"].extend(response_lengths)
+
             test_batch = test_batch.union(test_output_gen_batch)
             test_batch.meta_info["validate"] = True
 
@@ -603,6 +608,9 @@ class RayPPOTrainer:
                 for key, lst in result["reward_extra_info"].items():
                     reward_extra_infos_dict[key].extend(lst)
                     print(f"len reward_extra_infos_dict['{key}']: {len(reward_extra_infos_dict[key])}")
+            reward_extra_infos_dict["data_source"].extend(
+                test_batch.non_tensor_batch.get("data_source", ["unknown"] * reward_tensor.shape[0])
+            )
 
             # collect num_turns of each prompt
             if "__num_turns__" in test_batch.non_tensor_batch:
