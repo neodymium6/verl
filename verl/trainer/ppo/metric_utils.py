@@ -135,11 +135,79 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
     valid_adv = torch.masked_select(advantages, response_mask)
     valid_returns = torch.masked_select(returns, response_mask)
 
+    # compute response length statistics for positive and negative advantages
+    seq_advs = advantages[:, 0]
+    adv_pos = (seq_advs > 0).bool()
+    adv_neg = (seq_advs < 0).bool()
+    response_length_pos = torch.masked_select(response_length, adv_pos)
+    response_length_neg = torch.masked_select(response_length, adv_neg)
+
     if use_critic:
         values = batch.batch["values"]
         valid_values = torch.masked_select(values, response_mask)
         return_diff_var = torch.var(valid_returns - valid_values)
         return_var = torch.var(valid_returns)
+
+    reward_extra_metrics = {}
+    if "overlong_reward" in batch.non_tensor_batch:
+        overlong_rewards = batch.non_tensor_batch["overlong_reward"]
+        overlong_tensor = torch.tensor(overlong_rewards, dtype=torch.float32)
+        reward_extra_metrics.update(
+            {
+                "reward/overlong/mean": np.mean(overlong_rewards).item(),
+                "reward/overlong/max": np.max(overlong_rewards).item(),
+                "reward/overlong/min": np.min(overlong_rewards).item(),
+                "reward/overlong/std": torch.std(overlong_tensor).item(),
+                "reward/overlong/p25": torch.quantile(overlong_tensor, 0.25).item(),
+                "reward/overlong/median": torch.median(overlong_tensor).item(),
+                "reward/overlong/p75": torch.quantile(overlong_tensor, 0.75).item(),
+            }
+        )
+    if "score" in batch.non_tensor_batch:
+        correctness_scores = batch.non_tensor_batch["score"]
+        correctness_tensor = torch.tensor(correctness_scores, dtype=torch.float32)
+        reward_extra_metrics.update(
+            {
+                "reward/correctness/mean": np.mean(correctness_scores).item(),
+                "reward/correctness/max": np.max(correctness_scores).item(),
+                "reward/correctness/min": np.min(correctness_scores).item(),
+                "reward/correctness/std": torch.std(correctness_tensor).item(),
+                "reward/correctness/p25": torch.quantile(correctness_tensor, 0.25).item(),
+                "reward/correctness/median": torch.median(correctness_tensor).item(),
+                "reward/correctness/p75": torch.quantile(correctness_tensor, 0.75).item(),
+            }
+        )
+    if "total_reward" in batch.non_tensor_batch:
+        total_rewards = batch.non_tensor_batch["total_reward"]
+        total_tensor = torch.tensor(total_rewards, dtype=torch.float32)
+        reward_extra_metrics.update(
+            {
+                "reward/total/mean": np.mean(total_rewards).item(),
+                "reward/total/max": np.max(total_rewards).item(),
+                "reward/total/min": np.min(total_rewards).item(),
+                "reward/total/std": torch.std(total_tensor).item(),
+                "reward/total/p25": torch.quantile(total_tensor, 0.25).item(),
+                "reward/total/median": torch.median(total_tensor).item(),
+                "reward/total/p75": torch.quantile(total_tensor, 0.75).item(),
+            }
+        )
+    import re
+
+    for key in batch.non_tensor_batch.keys():
+        if re.match(r"(repetition_\d+gram|topk\d+_\d+gram)", key):
+            rep_values = batch.non_tensor_batch[key]
+            rep_tensor = torch.tensor(rep_values, dtype=torch.float32)
+            reward_extra_metrics.update(
+                {
+                    f"ngram/{key}/mean": np.mean(rep_values).item(),
+                    # f"ngram/{key}/max": np.max(rep_values).item(),
+                    # f"ngram/{key}/min": np.min(rep_values).item(),
+                    f"ngram/{key}/std": torch.std(rep_tensor).item(),
+                    # f"ngram/{key}/p25": torch.quantile(rep_tensor, 0.25).item(),
+                    f"ngram/{key}/median": torch.median(rep_tensor).item(),
+                    # f"ngram/{key}/p75": torch.quantile(rep_tensor, 0.75).item(),
+                }
+            )
 
     # Aborted samples and non-aborted response length statistics
     # response_length_non_aborted/*: statistics computed on non-aborted samples only
@@ -192,6 +260,18 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         "response_length/clip_ratio": torch.mean(torch.eq(response_length, max_response_length).float())
         .detach()
         .item(),
+        "response_length/std": torch.std(response_length).detach().item(),
+        "response_length/p25": torch.quantile(response_length, 0.25).detach().item(),
+        "response_length/median": torch.median(response_length).detach().item(),
+        "response_length/p75": torch.quantile(response_length, 0.75).detach().item(),
+        # response length for positive advantages
+        "response_length/pos_adv_mean": torch.mean(response_length_pos).detach().item(),
+        "response_length/pos_adv_std": torch.std(response_length_pos).detach().item(),
+        "response_length/pos_adv_median": torch.median(response_length_pos).detach().item(),
+        # response length for negative advantages
+        "response_length/neg_adv_mean": torch.mean(response_length_neg).detach().item(),
+        "response_length/neg_adv_std": torch.std(response_length_neg).detach().item(),
+        "response_length/neg_adv_median": torch.median(response_length_neg).detach().item(),
         # response length (non-aborted only)
         # These statistics exclude aborted samples to avoid skew from zeros
         "response_length_non_aborted/mean": non_aborted_response_length_mean,
@@ -206,7 +286,9 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         "prompt_length/max": torch.max(prompt_length).detach().item(),
         "prompt_length/min": torch.min(prompt_length).detach().item(),
         "prompt_length/clip_ratio": torch.mean(torch.eq(prompt_length, max_prompt_length).float()).detach().item(),
+        "prompt_length/std": torch.std(prompt_length).detach().item(),
     }
+    metrics.update(reward_extra_metrics)
 
     # multi-turn conversation
     if "__num_turns__" in batch.non_tensor_batch:
