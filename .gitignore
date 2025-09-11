@@ -126,3 +126,6 @@ logs
 log
 outputs
 .history
+
+tsubame_logs/
+data/
