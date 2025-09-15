@@ -22,7 +22,7 @@ __all__ = ["register_adv_est", "get_adv_estimator_fn", "AdvantageEstimator"]
 
 from collections import defaultdict
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 import numpy as np
 import torch
@@ -40,7 +40,7 @@ PolicyLossFn = Callable[
         torch.Tensor,  # advantages
         torch.Tensor,  # response_mask
         str,  # loss_agg_mode
-        Optional[DictConfig | AlgoConfig],  # config
+        DictConfig | AlgoConfig | None,  # config
         torch.Tensor | None,  # rollout_log_probs
     ],
     tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
@@ -263,9 +263,9 @@ def compute_grpo_outcome_advantage(
     token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,
     index: np.ndarray,
+    config: AlgoConfig,
     epsilon: float = 1e-6,
     norm_adv_by_std_in_grpo: bool = True,
-    config: Optional[AlgoConfig] = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Compute advantage for GRPO, operating only on Outcome reward
@@ -332,7 +332,7 @@ def compute_grpo_passk_outcome_advantage(
     index: np.ndarray,
     epsilon: float = 1e-6,
     norm_adv_by_std_in_grpo: bool = True,
-    config: Optional[AlgoConfig] = None,
+    config: AlgoConfig | None = None,
     **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
@@ -395,7 +395,7 @@ def compute_reinforce_plus_plus_baseline_outcome_advantage(
     response_mask: torch.Tensor,
     index: torch.Tensor,
     epsilon: float = 1e-6,
-    config: Optional[AlgoConfig] = None,
+    config: AlgoConfig | None = None,
     **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
@@ -447,7 +447,7 @@ def compute_rloo_outcome_advantage(
     response_mask: torch.Tensor,
     index: np.ndarray,
     epsilon: float = 1e-6,
-    config: Optional[AlgoConfig] = None,
+    config: AlgoConfig | None = None,
     **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
@@ -499,7 +499,7 @@ def compute_opo_outcome_advantage(
     response_mask: torch.Tensor,
     index: np.ndarray,
     epsilon: float = 1e-6,
-    config: Optional[AlgoConfig] = None,
+    config: AlgoConfig | None = None,
     **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
@@ -549,7 +549,7 @@ def compute_opo_outcome_advantage(
 
 @register_adv_est(AdvantageEstimator.REINFORCE_PLUS_PLUS)  # or simply: @register_adv_est("reinforce_plus_plus")
 def compute_reinforce_plus_plus_outcome_advantage(
-    token_level_rewards: torch.Tensor, response_mask: torch.Tensor, config: Optional[AlgoConfig] = None, **kwargs
+    token_level_rewards: torch.Tensor, response_mask: torch.Tensor, config: AlgoConfig | None = None, **kwargs
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Compute advantage for REINFORCE++.
@@ -591,7 +591,7 @@ def compute_remax_outcome_advantage(
     token_level_rewards: torch.Tensor,
     reward_baselines: torch.Tensor,
     response_mask: torch.Tensor,
-    config: Optional[AlgoConfig] = None,
+    config: AlgoConfig | None = None,
     **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
@@ -820,7 +820,7 @@ def compute_policy_loss_vanilla(
     advantages: torch.Tensor,
     response_mask: torch.Tensor,
     loss_agg_mode: str = "token-mean",
-    config: Optional[DictConfig | AlgoConfig] = None,
+    config: DictConfig | AlgoConfig | None = None,
     rollout_log_probs: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
@@ -909,7 +909,7 @@ def compute_policy_loss_gspo(
     advantages: torch.Tensor,
     response_mask: torch.Tensor,
     loss_agg_mode: str = "seq-mean-token-mean",
-    config: Optional[DictConfig | ActorConfig] = None,
+    config: DictConfig | ActorConfig | None = None,
     rollout_log_probs: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
@@ -975,7 +975,7 @@ def compute_policy_loss_gpg(
     advantages: torch.Tensor,
     response_mask: torch.Tensor,
     loss_agg_mode: str = "token-mean",
-    config: Optional[DictConfig | AlgoConfig] = None,
+    config: DictConfig | AlgoConfig | None = None,
     rollout_log_probs: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Adapted from
@@ -1004,7 +1004,7 @@ def compute_policy_loss_clip_cov(
     advantages: torch.Tensor,
     response_mask: torch.Tensor,
     loss_agg_mode: str = "token-mean",
-    config: Optional[DictConfig | AlgoConfig] = None,
+    config: DictConfig | AlgoConfig | None = None,
     rollout_log_probs: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
@@ -1099,7 +1099,7 @@ def compute_policy_loss_kl_cov(
     advantages: torch.Tensor,
     response_mask: torch.Tensor,
     loss_agg_mode: str = "token-mean",
-    config: Optional[DictConfig | AlgoConfig] = None,
+    config: DictConfig | AlgoConfig | None = None,
     rollout_log_probs: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
@@ -1171,7 +1171,7 @@ def compute_policy_loss_geo_mean(
     advantages: torch.Tensor,
     response_mask: torch.Tensor,
     loss_agg_mode: str = "token-mean",
-    config: Optional[DictConfig | AlgoConfig] = None,
+    config: DictConfig | AlgoConfig | None = None,
     rollout_log_probs: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
