@@ -320,6 +320,19 @@ def compute_grpo_outcome_advantage(
                 scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
             else:
                 scores[i] = scores[i] - id2mean[index[i]]
+
+        custom_adv_config = config.get("custom_adv", None)
+        if custom_adv_config is not None and custom_adv_config.get("use_delta_l", False):
+            alpha = custom_adv_config.get("delta_l_alpha", 1.0)
+            valid_length_list = response_mask.sum(dim=1).detach().cpu().numpy().tolist()
+            mean_length = float(np.mean(valid_length_list))
+            length_reciprocal_list = []
+            for length in valid_length_list:
+                length_reciprocal_list.append(1 / ((length / mean_length) ** alpha))
+            length_reciprocal_mean = float(np.mean(length_reciprocal_list))
+            for i in range(bsz):
+                scores[i] = scores[i] * (length_reciprocal_list[i] / length_reciprocal_mean)
+
         scores = scores.unsqueeze(-1) * response_mask
 
     return scores, scores
@@ -731,6 +744,8 @@ def agg_loss(loss_mat: torch.Tensor, loss_mask: torch.Tensor, loss_agg_mode: str
         # throughout training to well-replicate the DrGRPO paper.
         # TODO: Perhaps add user-defined normalizer argument to
         # agg_loss to ensure divisor stays constant throughout.
+    elif loss_agg_mode == "padded-token-mean":
+        loss = (loss_mat * loss_mask).mean()
     else:
         raise ValueError(f"Invalid loss_agg_mode: {loss_agg_mode}")
 
