@@ -26,6 +26,9 @@ algorithm:
   custom_adv:
     use_delta_l: False
     delta_l_alpha: 1.0
+    use_dual_agg: False
+    dual_agg_batch_mean: False
+    dual_agg_clip_factor: 2.0
 
 trainer:
   project_name: verl-dapo
