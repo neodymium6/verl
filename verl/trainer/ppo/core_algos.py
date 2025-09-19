@@ -714,7 +714,12 @@ def compute_rewards(token_level_scores, old_log_prob, ref_log_prob, kl_ratio):
     return token_level_scores - kl * kl_ratio
 
 
-def agg_loss(loss_mat: torch.Tensor, loss_mask: torch.Tensor, loss_agg_mode: str):
+def agg_loss(
+    loss_mat: torch.Tensor,
+    loss_mask: torch.Tensor,
+    loss_agg_mode: str,
+    mode_mask: list[str] | None = None,
+):
     """
     Aggregate the loss matrix into a scalar.
 
@@ -746,6 +751,24 @@ def agg_loss(loss_mat: torch.Tensor, loss_mask: torch.Tensor, loss_agg_mode: str
         # agg_loss to ensure divisor stays constant throughout.
     elif loss_agg_mode == "padded-token-mean":
         loss = (loss_mat * loss_mask).mean()
+    elif loss_agg_mode == "dual-sum":
+        assert mode_mask is not None, "mode_mask must be provided for dual-sum loss aggregation."
+        assert len(mode_mask) == loss_mat.shape[0], (
+            f"mode_mask length {len(mode_mask)} must match batch size {loss_mat.shape[0]}."
+        )
+        loss = torch.tensor(0.0, device=loss_mat.device, dtype=loss_mat.dtype)
+        mode_set = set(mode_mask)
+        sum_tokens = torch.sum(loss_mask)
+        for mode in mode_set:
+            mode_indices = [i for i, m in enumerate(mode_mask) if m == mode]
+            mode_loss_mat = loss_mat[mode_indices]
+            mode_loss_mask = loss_mask[mode_indices]
+            mode_sum_tokens = torch.sum(mode_loss_mask)
+            loss += agg_loss(
+                mode_loss_mat,
+                mode_loss_mask,
+                loss_agg_mode=mode,
+            ) * (mode_sum_tokens / sum_tokens)
     else:
         raise ValueError(f"Invalid loss_agg_mode: {loss_agg_mode}")
 
@@ -912,7 +935,19 @@ def compute_policy_loss_vanilla(
         tis_imp_ratio = torch.clamp(tis_imp_ratio, max=config.tis_imp_ratio_cap)
         pg_losses = pg_losses * tis_imp_ratio
 
-    pg_loss = agg_loss(loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode)
+    mode_mask: list[str] = []
+    for adv in advantages:
+        if adv[0] > 0:
+            mode_mask.append("seq-mean-token-mean")
+        else:
+            mode_mask.append("token-mean")
+
+    pg_loss = agg_loss(
+        loss_mat=pg_losses,
+        loss_mask=response_mask,
+        loss_agg_mode=loss_agg_mode,
+        mode_mask=mode_mask,
+    )
 
     return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
 
