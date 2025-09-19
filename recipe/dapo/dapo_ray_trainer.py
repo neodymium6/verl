@@ -396,6 +396,8 @@ class RayDAPOTrainer(RayPPOTrainer):
                     if self.config.trainer.critic_warmup <= self.global_steps:
                         # update actor
                         with marked_timer("update_actor", timing_raw, "red"):
+                            response_masks = batch.batch["response_mask"]
+                            batch.meta_info["response_lengths"] = response_masks.sum(dim=1).cpu().numpy()
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                         metrics.update(actor_output_metrics)

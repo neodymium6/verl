@@ -364,6 +364,39 @@ class DataParallelPPOActor(BasePPOActor):
         # make sure we are in training mode
         self.actor_module.train()
 
+        loss_agg_mode = self.config.loss_agg_mode
+        if loss_agg_mode == "precise-token-mean":
+            gen_batch_size = len(data.meta_info["response_lengths"])
+            dp_gen_batch_size = len(data)
+            assert gen_batch_size % dp_gen_batch_size == 0, (
+                f"gen_batch_size {gen_batch_size} % dp_gen_batch_size {dp_gen_batch_size} != 0, "
+                "please make sure the data is correctly prepared."
+            )
+            dp_size = gen_batch_size // dp_gen_batch_size
+            ppo_mini_batch_size = self.config.ppo_mini_batch_size
+            assert dp_gen_batch_size % ppo_mini_batch_size == 0, (
+                f"dp_gen_batch_size {dp_gen_batch_size} % ppo_mini_batch_size {ppo_mini_batch_size} != 0, "
+                "please make sure the data is correctly prepared."
+            )
+            dp_length_list = [[] for _ in range(dp_size)]
+            for rank_i in range(dp_size):
+                rank_indices = list(
+                    range(
+                        (len(data.meta_info["response_lengths"]) // dp_size) * rank_i,
+                        (len(data.meta_info["response_lengths"]) // dp_size) * (rank_i + 1),
+                    )
+                )
+                rank_lengths = [data.meta_info["response_lengths"][i] for i in rank_indices]
+                for i in range(len(data) // ppo_mini_batch_size):
+                    mb_indecis = list(
+                        range(
+                            i * ppo_mini_batch_size,
+                            (i + 1) * ppo_mini_batch_size,
+                        )
+                    )
+                    mb_lengths = [rank_lengths[j] for j in mb_indecis]
+                    dp_length_list[rank_i].append(mb_lengths)
+
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid silent error
 
         select_keys = [
@@ -422,7 +455,13 @@ class DataParallelPPOActor(BasePPOActor):
                     entropy_coeff = self.config.entropy_coeff
                     loss_agg_mode = self.config.loss_agg_mode
 
-                    if self.config.use_dynamic_bsz:
+                    if loss_agg_mode == "precise-token-mean":
+                        mini_batch_length_sum = 0
+                        for length_list_rank_i in dp_length_list:
+                            mini_batch_length_sum += sum(length_list_rank_i[batch_idx])
+                        micro_batch_length_sum = response_mask.sum().item()
+                        loss_scale_factor = dp_size * micro_batch_length_sum / mini_batch_length_sum
+                    elif self.config.use_dynamic_bsz:
                         loss_scale_factor = response_mask.shape[0] / self.config.ppo_mini_batch_size
                     else:
                         loss_scale_factor = 1 / self.gradient_accumulation
@@ -488,6 +527,9 @@ class DataParallelPPOActor(BasePPOActor):
                             "actor/pg_clipfrac": pg_clipfrac.detach().item(),
                             "actor/ppo_kl": ppo_kl.detach().item(),
                             "actor/pg_clipfrac_lower": pg_clipfrac_lower.detach().item(),
+                            "actor/loss_scale_factor_mean": loss_scale_factor,
+                            "actor/loss_scale_factor_min": loss_scale_factor,
+                            "actor/loss_scale_factor_max": loss_scale_factor,
                         }
                     )
                     append_to_dict(metrics, micro_batch_metrics)
