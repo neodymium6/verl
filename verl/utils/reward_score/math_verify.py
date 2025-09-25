@@ -20,20 +20,29 @@ except ImportError:
     print("To use Math-Verify, please install it first by running `pip install math-verify`.")
 
 
-def compute_score(model_output: str, ground_truth: str, timeout_score: float = 0) -> bool:
+def compute_score(model_output: str, ground_truth: str, timeout_score: float = 0) -> dict:
     verify_func = math_metric(
         gold_extraction_target=(LatexExtractionConfig(),),
         pred_extraction_target=(ExprExtractionConfig(), LatexExtractionConfig()),
     )
     ret_score = 0.0
+    extractions = None
 
     # Wrap the ground truth in \boxed{} format for verification
     ground_truth_boxed = "\\boxed{" + ground_truth + "}"
     try:
-        ret_score, _ = verify_func([ground_truth_boxed], [model_output])
+        ret_score, extractions = verify_func([ground_truth_boxed], [model_output])
     except Exception:
         pass
     except TimeoutException:
         ret_score = timeout_score
 
-    return ret_score
+    pred = "[INVALID]"
+    if extractions and len(extractions) > 1 and len(extractions[1]) > 0:
+        pred = extractions[1][0]
+
+    return {
+        "score": ret_score,
+        "acc": ret_score == 1,
+        "pred": pred,
+    }

@@ -55,6 +55,10 @@ def default_compute_score(
 
         # from . import math_verify
         # res = math_verify.compute_score(solution_str, ground_truth)
+    elif data_source == "deepscaler":
+        from . import math_verify
+
+        res = math_verify.compute_score(solution_str, ground_truth)
     elif data_source == "math_dapo" or data_source.startswith("aime"):
         from . import math_dapo
 
