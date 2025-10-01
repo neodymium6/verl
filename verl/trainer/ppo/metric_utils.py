@@ -268,10 +268,18 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         "response_length/pos_adv_mean": torch.mean(response_length_pos).detach().item(),
         "response_length/pos_adv_std": torch.std(response_length_pos).detach().item(),
         "response_length/pos_adv_median": torch.median(response_length_pos).detach().item(),
+        "response_length/pos_adv_min": torch.min(response_length_pos).detach().item(),
+        "response_length/pos_adv_clip_ratio": torch.mean(torch.eq(response_length_pos, max_response_length).float())
+        .detach()
+        .item(),
         # response length for negative advantages
         "response_length/neg_adv_mean": torch.mean(response_length_neg).detach().item(),
         "response_length/neg_adv_std": torch.std(response_length_neg).detach().item(),
         "response_length/neg_adv_median": torch.median(response_length_neg).detach().item(),
+        "response_length/neg_adv_min": torch.min(response_length_neg).detach().item(),
+        "response_length/neg_adv_clip_ratio": torch.mean(torch.eq(response_length_neg, max_response_length).float())
+        .detach()
+        .item(),
         # response length (non-aborted only)
         # These statistics exclude aborted samples to avoid skew from zeros
         "response_length_non_aborted/mean": non_aborted_response_length_mean,
