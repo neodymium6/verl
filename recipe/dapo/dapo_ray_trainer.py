@@ -469,6 +469,7 @@ class RayDAPOTrainer(RayPPOTrainer):
                         "train/gen_steps": self.gen_steps,
                         "train/global_steps": self.global_steps,
                         "train/epoch": epoch,
+                        "train/prompts": self.global_steps * self.config.data.train_batch_size,
                     }
                 )
                 batch = None
