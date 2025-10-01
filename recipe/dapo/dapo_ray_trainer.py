@@ -208,6 +208,16 @@ class RayDAPOTrainer(RayPPOTrainer):
                                     new_batch.batch["responses"], skip_special_tokens=True
                                 )
                                 out_tokens_raw = new_batch.batch["responses"].cpu().tolist()
+                                response_masks_raw = compute_response_mask(new_batch).cpu().tolist()
+                                response_lens_raw = [sum(mask) for mask in response_masks_raw]
+                                out_tokens_raw = [
+                                    tokens[:length]
+                                    for tokens, length in zip(
+                                        out_tokens_raw,
+                                        response_lens_raw,
+                                        strict=True,
+                                    )
+                                ]
                                 sample_gts = [
                                     item.non_tensor_batch.get("reward_model", {}).get("ground_truth", None)
                                     for item in new_batch
@@ -314,6 +324,16 @@ class RayDAPOTrainer(RayPPOTrainer):
                             inputs = self.tokenizer.batch_decode(batch.batch["prompts"], skip_special_tokens=True)
                             outputs = self.tokenizer.batch_decode(batch.batch["responses"], skip_special_tokens=True)
                             out_tokens = batch.batch["responses"].cpu().tolist()
+                            response_masks = compute_response_mask(batch).cpu().tolist()
+                            response_lens = [sum(mask) for mask in response_masks]
+                            out_tokens = [
+                                tokens[:length]
+                                for tokens, length in zip(
+                                    out_tokens,
+                                    response_lens,
+                                    strict=True,
+                                )
+                            ]
                             sample_gts = [
                                 item.non_tensor_batch.get("reward_model", {}).get("ground_truth", None)
                                 for item in batch

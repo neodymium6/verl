@@ -624,6 +624,9 @@ class RayPPOTrainer:
         # dump generations
         val_data_dir = self.config.trainer.get("validation_data_dir", None)
         if val_data_dir:
+            response_mask = compute_response_mask(test_batch)
+            response_lengths = response_mask.sum(-1).float().cpu().tolist()
+            sample_out_ids = [ids[: int(length)] for ids, length in zip(sample_out_ids, response_lengths, strict=True)]
             self._dump_generations(
                 inputs=sample_inputs,
                 outputs=sample_outputs,
