@@ -146,6 +146,11 @@ class vLLMRollout(BaseRollout):
             )
 
         max_model_len = int(config.max_model_len or config.prompt_length + config.response_length)
+        val_response_length = config.val_kwargs.response_length
+        max_model_len = max(
+            max_model_len,
+            config.prompt_length + val_response_length,
+        )
 
         if max_num_batched_tokens < max_model_len and self.config.enable_chunked_prefill:
             raise ValueError(
@@ -317,6 +322,7 @@ class vLLMRollout(BaseRollout):
                 "top_p": self.config.val_kwargs.top_p,
                 "temperature": self.config.val_kwargs.temperature,
                 "n": 1,  # if validate, already repeat in ray_trainer
+                "max_tokens": self.config.val_kwargs.response_length,
             }
 
         lora_requests = None

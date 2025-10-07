@@ -30,5 +30,10 @@ algorithm:
     dual_agg_batch_mean: False
     dual_agg_clip_factor: 2.0
 
+actor_rollout_ref:
+  rollout:
+    val_kwargs:
+      response_length: ${data.max_response_length}
+
 trainer:
   project_name: verl-dapo
