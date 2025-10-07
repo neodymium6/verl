@@ -8,10 +8,9 @@ import pandas as pd
 def prepare_dapo(
     save_path: Path,
     dedup: bool,
-    rename_to_dapo01: bool,
     boxed: bool,
 ) -> pd.DataFrame:
-    dataset = datasets.load_dataset("BytedTsinghua-SIA/DAPO-Math-17k", split="train")
+    dataset = datasets.load_dataset("BytedTsinghua-SIA/AIME-2024", split="train")
     dataset = dataset.map(
         lambda x: {
             "prompt_for_dedup": x["prompt"][0]["content"],
@@ -27,11 +26,9 @@ def prepare_dapo(
     if boxed:
         df["data_source"] = df["data_source"] + "_boxed"
         df = build_boxed_prompt(df)
-    elif rename_to_dapo01:
-        df["data_source"] = df["data_source"] + "01"
 
     save_path.mkdir(parents=True, exist_ok=True)
-    file_name = "dapo-math-17k"
+    file_name = "aime-2024"
     if dedup:
         file_name += "_dedup"
     if boxed:
@@ -53,20 +50,23 @@ def build_boxed_prompt(
         return [{"role": "user", "content": new_prompt}]
 
     df["prompt"] = df["prompt"].apply(process_data)
+    for idx in range(len(df)):
+        prompt = df.loc[idx, "prompt"][0]["content"]
+        problem = prompt.split(" Let's think step by step")[0]
+        raw_problem = df.loc[idx, "extra_info"]["raw_problem"]
+        assert problem == raw_problem, f"Problem mismatch at index {idx}"
     return df
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dedup", action="store_true", help="Whether to deduplicate the dataset")
-    parser.add_argument("--r01", action="store_true", help="Whether to rename the dataset to dapo01")
     parser.add_argument("--boxed", action="store_true", help="Whether to use boxed version")
     args = parser.parse_args()
-    local_dir = Path("./data/dapo01" if args.r01 else "./data/dapo")
+    local_dir = Path("./data/dapo")
     df = prepare_dapo(
         local_dir,
         args.dedup,
-        args.r01,
         args.boxed,
     )
     print(df.head())
