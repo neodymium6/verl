@@ -507,6 +507,10 @@ class RayDAPOTrainer(RayPPOTrainer):
                         "train/global_steps": self.global_steps,
                         "train/epoch": epoch,
                         "train/prompts": self.global_steps * self.config.data.train_batch_size,
+                        "train/num_minibatches": (
+                            self.config.data.train_batch_size // self.config.actor_rollout_ref.actor.ppo_mini_batch_size
+                        )
+                        * self.global_steps,
                     }
                 )
                 batch = None
