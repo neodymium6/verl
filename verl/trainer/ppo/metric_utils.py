@@ -280,6 +280,9 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         "response_length/neg_adv_clip_ratio": torch.mean(torch.eq(response_length_neg, max_response_length).float())
         .detach()
         .item(),
+        "response_length/pos_neg_diff": (torch.mean(response_length_pos) - torch.mean(response_length_neg))
+        .detach()
+        .item(),
         # response length (non-aborted only)
         # These statistics exclude aborted samples to avoid skew from zeros
         "response_length_non_aborted/mean": non_aborted_response_length_mean,
