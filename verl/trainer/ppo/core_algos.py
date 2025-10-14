@@ -300,6 +300,7 @@ def compute_grpo_outcome_advantage(
     id2score = defaultdict(list)
     id2mean = {}
     id2std = {}
+    custom_adv_config = config.get("custom_adv", None)
 
     with torch.no_grad():
         bsz = scores.shape[0]
@@ -309,6 +310,16 @@ def compute_grpo_outcome_advantage(
             if len(id2score[idx]) == 1:
                 id2mean[idx] = torch.tensor(0.0)
                 id2std[idx] = torch.tensor(1.0)
+            elif (
+                custom_adv_config is not None
+                and custom_adv_config.get("use_virtual_correct", False)
+                and torch.all(torch.stack(id2score[idx]) == 0.0)
+            ):
+                virtual_correct_score = torch.tensor(1.0)
+                augmented_scores = id2score[idx] + [virtual_correct_score]
+                scores_tensor = torch.stack(augmented_scores)
+                id2mean[idx] = torch.mean(scores_tensor)
+                id2std[idx] = torch.std(scores_tensor)
             elif len(id2score[idx]) > 1:
                 scores_tensor = torch.stack(id2score[idx])
                 id2mean[idx] = torch.mean(scores_tensor)
@@ -321,7 +332,6 @@ def compute_grpo_outcome_advantage(
             else:
                 scores[i] = scores[i] - id2mean[index[i]]
 
-        custom_adv_config = config.get("custom_adv", None)
         if custom_adv_config is not None and custom_adv_config.get("use_delta_l", False):
             alpha = custom_adv_config.get("delta_l_alpha", 1.0)
             valid_length_list = response_mask.sum(dim=1).detach().cpu().numpy().tolist()

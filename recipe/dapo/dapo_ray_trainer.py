@@ -260,6 +260,8 @@ class RayDAPOTrainer(RayPPOTrainer):
                             new_batch.non_tensor_batch["seq_reward"] = (
                                 new_batch.batch["token_level_scores"].sum(dim=-1).numpy()
                             )
+                        elif metric_name == "acc_np":
+                            metric_name = "acc"
 
                         # Collect the sequence reward for each trajectory
                         prompt_uid2metric_vals = defaultdict(list)
@@ -272,11 +274,15 @@ class RayDAPOTrainer(RayPPOTrainer):
                         for prompt_uid, metric_vals in prompt_uid2metric_vals.items():
                             prompt_uid2metric_std[prompt_uid] = np.std(metric_vals)
 
-                        kept_prompt_uids = [
-                            uid
-                            for uid, std in prompt_uid2metric_std.items()
-                            if std > 0 or len(prompt_uid2metric_vals[uid]) == 1
-                        ]
+                        if self.config.algorithm.filter_groups.metric == "acc_np":
+                            # keep those with the accuracy not all being 1
+                            kept_prompt_uids = [uid for uid, vals in prompt_uid2metric_vals.items() if not all(vals)]
+                        else:
+                            kept_prompt_uids = [
+                                uid
+                                for uid, std in prompt_uid2metric_std.items()
+                                if std > 0 or len(prompt_uid2metric_vals[uid]) == 1
+                            ]
                         num_prompt_in_batch += len(kept_prompt_uids)
 
                         kept_traj_idxs = []
