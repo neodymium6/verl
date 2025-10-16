@@ -343,17 +343,21 @@ def compute_grpo_outcome_advantage(
             for i in range(bsz):
                 scores[i] = scores[i] * (length_reciprocal_list[i] / length_reciprocal_mean)
         elif custom_adv_config is not None and custom_adv_config.get("use_dual_agg", False):
+            alpha = custom_adv_config.get("dual_agg_alpha", 1.0)
+            beta = custom_adv_config.get("dual_agg_beta", 0.0)
             if custom_adv_config.get("dual_agg_batch_mean", False):
+                raise NotImplementedError
                 valid_length_list = response_mask.sum(dim=1).detach().cpu().numpy().tolist()
                 length_tensor = torch.tensor(valid_length_list, dtype=torch.float32)
                 is_correct_tensor = scores > 0
                 if torch.sum(is_correct_tensor) == 0:
                     correct_length_mean = 0.0
                 else:
-                    correct_length_mean = torch.mean(length_tensor[is_correct_tensor])
+                    # correct_length_mean = torch.mean(length_tensor[is_correct_tensor])
+                    correct_length_mean = torch.mean(length_tensor[is_correct_tensor] ** alpha)
                 for i in range(bsz):
                     if scores[i] > 0:
-                        scale_factor = correct_length_mean / valid_length_list[i]
+                        scale_factor = correct_length_mean / (valid_length_list[i] ** alpha)
                         clip_factor = custom_adv_config.get("dual_agg_clip_factor", 2.0)
                         scale_factor = np.clip(scale_factor, 1 / clip_factor, clip_factor)
                         scores[i] = scores[i] * scale_factor
@@ -362,22 +366,31 @@ def compute_grpo_outcome_advantage(
                 id2length = defaultdict(list)
                 id2is_correct = defaultdict(list)
                 id2correct_length_mean = {}
+                id2wrong_length_mean = {}
                 for i in range(bsz):
                     id2length[index[i]].append(valid_length_list[i])
                     id2is_correct[index[i]].append(scores[i] > 0)
                 for idx in id2length:
                     length_tensor = torch.tensor(id2length[idx], dtype=torch.float32)
                     is_correct_tensor = torch.tensor(id2is_correct[idx], dtype=torch.bool)
+                    is_wrong_tensor = ~is_correct_tensor
                     if torch.sum(is_correct_tensor) == 0:
                         id2correct_length_mean[idx] = 0.0
                     else:
-                        id2correct_length_mean[idx] = torch.mean(length_tensor[is_correct_tensor])
+                        id2correct_length_mean[idx] = torch.mean(length_tensor[is_correct_tensor] ** alpha).item()
+                    if torch.sum(is_wrong_tensor) == 0:
+                        id2wrong_length_mean[idx] = 0.0
+                    else:
+                        id2wrong_length_mean[idx] = torch.mean(length_tensor[is_wrong_tensor] ** beta).item()
                 for i in range(bsz):
                     if scores[i] > 0:
-                        scale_factor = id2correct_length_mean[index[i]] / valid_length_list[i]
-                        clip_factor = custom_adv_config.get("dual_agg_clip_factor", 2.0)
+                        scale_factor = id2correct_length_mean[index[i]] / (valid_length_list[i] ** alpha)
+                    else:
+                        scale_factor = id2wrong_length_mean[index[i]] / (valid_length_list[i] ** beta)
+                    clip_factor = custom_adv_config.get("dual_agg_clip_factor", None)
+                    if clip_factor is not None:
                         scale_factor = np.clip(scale_factor, 1 / clip_factor, clip_factor)
-                        scores[i] = scores[i] * scale_factor
+                    scores[i] = scores[i] * scale_factor
 
         scores = scores.unsqueeze(-1) * response_mask
 

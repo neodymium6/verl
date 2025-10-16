@@ -29,6 +29,8 @@ algorithm:
     use_dual_agg: False
     dual_agg_batch_mean: False
     dual_agg_clip_factor: 2.0
+    dual_agg_alpha: 1.0
+    dual_agg_beta: 0.0
     use_virtual_correct: False
 
 actor_rollout_ref:
