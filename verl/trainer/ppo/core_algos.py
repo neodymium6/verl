@@ -257,6 +257,62 @@ def compute_gae_advantage_return(
     return advantages, returns
 
 
+def compute_scale_factor_stats(
+    scale_factors,
+    mask,
+    clip_factor=None,
+):
+    scale_factors_filtered = scale_factors[mask]
+    count = len(scale_factors_filtered)
+
+    if count == 0:
+        return {
+            "count": 0,
+            "mean": 0.0,
+            "std": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "q25": 0.0,
+            "q50": 0.0,
+            "q75": 0.0,
+            "up_clipped_ratio": 0.0,
+            "down_clipped_ratio": 0.0,
+            "clipped_ratio": 0.0,
+        }
+
+    stats = {
+        "count": count,
+        "mean": float(np.mean(scale_factors_filtered)),
+        "std": float(np.std(scale_factors_filtered)),
+        "min": float(np.min(scale_factors_filtered)),
+        "max": float(np.max(scale_factors_filtered)),
+        "q25": float(np.quantile(scale_factors_filtered, 0.25)),
+        "q50": float(np.quantile(scale_factors_filtered, 0.50)),
+        "q75": float(np.quantile(scale_factors_filtered, 0.75)),
+    }
+
+    if clip_factor is not None:
+        up_clipped = np.sum(scale_factors_filtered > clip_factor)
+        down_clipped = np.sum(scale_factors_filtered < 1 / clip_factor)
+        stats.update(
+            {
+                "up_clipped_ratio": float(up_clipped / count),
+                "down_clipped_ratio": float(down_clipped / count),
+                "clipped_ratio": float((up_clipped + down_clipped) / count),
+            }
+        )
+    else:
+        stats.update(
+            {
+                "up_clipped_ratio": 0.0,
+                "down_clipped_ratio": 0.0,
+                "clipped_ratio": 0.0,
+            }
+        )
+
+    return stats
+
+
 # NOTE(sgm): this implementation only consider outcome supervision, where the reward is a scalar.
 @register_adv_est(AdvantageEstimator.GRPO)  # or simply: @register_adv_est("grpo")
 def compute_grpo_outcome_advantage(
@@ -302,6 +358,7 @@ def compute_grpo_outcome_advantage(
     id2std = {}
     custom_adv_config = config.get("custom_adv", None)
 
+    metrics = {}
     with torch.no_grad():
         bsz = scores.shape[0]
         for i in range(bsz):
@@ -382,19 +439,55 @@ def compute_grpo_outcome_advantage(
                         id2wrong_length_mean[idx] = 0.0
                     else:
                         id2wrong_length_mean[idx] = torch.mean(length_tensor[is_wrong_tensor] ** beta).item()
+                raw_scale_factors = []
+                is_pos_score = scores > 0
                 for i in range(bsz):
                     if scores[i] > 0:
                         scale_factor = id2correct_length_mean[index[i]] / (valid_length_list[i] ** alpha)
                     else:
                         scale_factor = id2wrong_length_mean[index[i]] / (valid_length_list[i] ** beta)
                     clip_factor = custom_adv_config.get("dual_agg_clip_factor", None)
+                    raw_scale_factors.append(scale_factor)
                     if clip_factor is not None:
                         scale_factor = np.clip(scale_factor, 1 / clip_factor, clip_factor)
                     scores[i] = scores[i] * scale_factor
 
+                all_mask = np.ones((bsz,), dtype=bool)
+                clip_factor = custom_adv_config.get("dual_agg_clip_factor", None)
+                metrics.update(
+                    {
+                        f"dual_agg/{k}": v
+                        for k, v in compute_scale_factor_stats(
+                            np.array(raw_scale_factors),
+                            all_mask,
+                            clip_factor=clip_factor,
+                        ).items()
+                    }
+                )
+                metrics.update(
+                    {
+                        f"dual_agg/pos_{k}": v
+                        for k, v in compute_scale_factor_stats(
+                            np.array(raw_scale_factors),
+                            is_pos_score.cpu().numpy(),
+                            clip_factor=clip_factor,
+                        ).items()
+                    }
+                )
+                metrics.update(
+                    {
+                        f"dual_agg/neg_{k}": v
+                        for k, v in compute_scale_factor_stats(
+                            np.array(raw_scale_factors),
+                            (~is_pos_score).cpu().numpy(),
+                            clip_factor=clip_factor,
+                        ).items()
+                    }
+                )
+
         scores = scores.unsqueeze(-1) * response_mask
 
-    return scores, scores
+    return scores, scores, metrics
 
 
 @register_adv_est(AdvantageEstimator.GRPO_PASSK)  # or simply: @register_adv_est("grpo_passk")
