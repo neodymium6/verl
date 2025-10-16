@@ -144,6 +144,7 @@ class ActorConfig(BaseConfig):
             "seq-mean-token-mean",
             "seq-mean-token-sum-norm",
             "padded-token-mean",
+            "sqrt-token-mean",
             "dual-sum",
             "precise-token-mean",
         ]

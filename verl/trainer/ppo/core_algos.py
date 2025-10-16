@@ -1002,6 +1002,11 @@ def agg_loss(
         # agg_loss to ensure divisor stays constant throughout.
     elif loss_agg_mode == "padded-token-mean":
         loss = (loss_mat * loss_mask).mean()
+    elif loss_agg_mode == "sqrt-token-mean":
+        mean_loss = verl_F.masked_mean(loss_mat, loss_mask)
+        sum_tokens = torch.sum(loss_mask)
+        sum_masks = loss_mask.shape[0] * loss_mask.shape[1]
+        loss = mean_loss * torch.sqrt(sum_tokens / sum_masks)
     elif loss_agg_mode == "dual-sum":
         assert mode_mask is not None, "mode_mask must be provided for dual-sum loss aggregation."
         assert len(mode_mask) == loss_mat.shape[0], (
