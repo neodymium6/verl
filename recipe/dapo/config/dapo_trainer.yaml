@@ -32,6 +32,8 @@ algorithm:
     dual_agg_alpha: 1.0
     dual_agg_beta: 0.0
     use_virtual_correct: False
+  gfpo:
+    gfpo_k: 8
 
 actor_rollout_ref:
   rollout:
