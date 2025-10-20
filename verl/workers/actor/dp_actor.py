@@ -365,7 +365,7 @@ class DataParallelPPOActor(BasePPOActor):
         self.actor_module.train()
 
         loss_agg_mode = self.config.loss_agg_mode
-        if loss_agg_mode == "precise-token-mean":
+        if loss_agg_mode in ["precise-token-mean", "precise-sqrt-token-mean"]:
             gen_batch_size = len(data.meta_info["response_lengths"])
             dp_gen_batch_size = len(data)
             assert gen_batch_size % dp_gen_batch_size == 0, (
@@ -461,6 +461,15 @@ class DataParallelPPOActor(BasePPOActor):
                             mini_batch_length_sum += sum(length_list_rank_i[batch_idx])
                         micro_batch_length_sum = response_mask.sum().item()
                         loss_scale_factor = dp_size * micro_batch_length_sum / mini_batch_length_sum
+                    elif loss_agg_mode == "precise-sqrt-token-mean":
+                        mini_batch_length_sum = 0
+                        for length_list_rank_i in dp_length_list:
+                            mini_batch_length_sum += sum(length_list_rank_i[batch_idx])
+                        micro_batch_length_sum = response_mask.sum().item()
+                        mini_batch_length_sqrt = mini_batch_length_sum**0.5
+                        max_token_len = response_mask.shape[1]
+                        max_token_sqrt = (dp_size * ppo_mini_batch_size * max_token_len) ** 0.5
+                        loss_scale_factor = dp_size * micro_batch_length_sum / (mini_batch_length_sqrt * max_token_sqrt)
                     elif self.config.use_dynamic_bsz:
                         loss_scale_factor = response_mask.shape[0] / self.config.ppo_mini_batch_size
                     else:

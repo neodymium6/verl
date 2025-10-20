@@ -985,7 +985,7 @@ def agg_loss(
         loss: `a scalar torch.Tensor`
             aggregated loss
     """
-    if loss_agg_mode == "token-mean" or loss_agg_mode == "precise-token-mean":
+    if loss_agg_mode in ["token-mean", "precise-token-mean", "precise-sqrt-token-mean"]:
         loss = verl_F.masked_mean(loss_mat, loss_mask)
     elif loss_agg_mode == "seq-mean-token-sum":
         seq_losses = torch.sum(loss_mat * loss_mask, dim=-1)  # token-sum
