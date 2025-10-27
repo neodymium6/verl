@@ -403,6 +403,17 @@ def compute_grpo_outcome_advantage(
         elif custom_adv_config is not None and custom_adv_config.get("use_dual_agg", False):
             alpha = custom_adv_config.get("dual_agg_alpha", 1.0)
             beta = custom_adv_config.get("dual_agg_beta", 0.0)
+
+            def harmonic_mean(tensor, power=1.0) -> torch.Tensor:
+                if len(tensor) == 0:
+                    return torch.tensor(0.0)
+                mean_value = torch.mean(tensor).item()
+                relative_ratio = mean_value / tensor
+                powered_ratio = relative_ratio**power
+                numerator = len(tensor) * (mean_value**power)
+                denominator = torch.sum(powered_ratio)
+                return numerator / denominator
+
             if custom_adv_config.get("dual_agg_batch_mean", False):
                 raise NotImplementedError
                 valid_length_list = response_mask.sum(dim=1).detach().cpu().numpy().tolist()
@@ -434,10 +445,16 @@ def compute_grpo_outcome_advantage(
                     is_wrong_tensor = ~is_correct_tensor
                     if torch.sum(is_correct_tensor) == 0:
                         id2correct_length_mean[idx] = 0.0
+                    elif custom_adv_config.get("dual_agg_use_harmonic_mean", False):
+                        id2correct_length_mean[idx] = harmonic_mean(
+                            length_tensor[is_correct_tensor], power=alpha
+                        ).item()
                     else:
                         id2correct_length_mean[idx] = torch.mean(length_tensor[is_correct_tensor] ** alpha).item()
                     if torch.sum(is_wrong_tensor) == 0:
                         id2wrong_length_mean[idx] = 0.0
+                    elif custom_adv_config.get("dual_agg_use_harmonic_mean", False):
+                        id2wrong_length_mean[idx] = harmonic_mean(length_tensor[is_wrong_tensor], power=beta).item()
                     else:
                         id2wrong_length_mean[idx] = torch.mean(length_tensor[is_wrong_tensor] ** beta).item()
                 raw_scale_factors = []
