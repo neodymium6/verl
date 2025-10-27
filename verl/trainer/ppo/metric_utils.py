@@ -77,6 +77,173 @@ def _compute_response_info(batch: DataProto) -> dict[str, Any]:
     )
 
 
+def compute_grouped_length_metrics(batch: DataProto) -> dict[str, Any]:
+    """
+    Computes length metrics grouped by data_source and uid.
+
+    Args:
+        batch: A DataProto object containing batch data.
+
+    Returns:
+        A dictionary containing grouped metrics including:
+            - data_source specific length statistics
+            - prompt (uid) specific length statistics within each data_source
+            - positive advantage statistics by prompt
+    """
+    # Get data sources and uids
+    data_sources = batch.non_tensor_batch.get("data_source", None)
+    uids = batch.non_tensor_batch.get("uid", None)
+
+    if data_sources is None or uids is None:
+        return {}  # Return empty dict if required data is missing
+
+    # Calculate response length
+    response_info = _compute_response_info(batch)
+    response_length = response_info["response_length"]
+
+    # Convert to numpy for easier grouping operations
+    response_length_np = response_length.detach().cpu().numpy()
+
+    advantages = batch.batch["advantages"]
+    seq_advs_np = advantages[:, 0].detach().cpu().numpy()
+
+    metrics = {}
+
+    # 1. Calculate metrics by data_source
+    unique_sources = set(data_sources)
+    for source in unique_sources:
+        # Get indices for this data source
+        source_indices = [i for i, ds in enumerate(data_sources) if ds == source]
+        source_lengths = response_length_np[source_indices]
+        source_advs = seq_advs_np[source_indices]
+        metrics[f"by_source/{source}/adv_positive_ratio"] = float(np.mean(source_advs > 0))
+
+        metrics[f"by_source/{source}/data_ratio"] = len(source_indices) / len(data_sources)
+
+        # Skip if no samples for this source
+        if len(source_lengths) == 0:
+            continue
+
+        # Calculate statistics
+        mean = float(np.mean(source_lengths))
+        std = float(np.std(source_lengths))
+        std_mean_ratio = std / (mean + 1e-5)  # Add epsilon to avoid division by zero (σ/μ)
+
+        # Store metrics
+        metrics[f"by_source/{source}/length/mean"] = mean
+        metrics[f"by_source/{source}/length/std"] = std
+        metrics[f"by_source/{source}/length/std_mean_ratio"] = std_mean_ratio
+
+        # 2. Calculate metrics by prompt (uid) within each data_source
+        source_uids = [uids[i] for i in source_indices]
+        unique_uids = set(source_uids)
+
+        # Store per-uid length stats for this data source
+        uid_means = []
+        uid_stds = []
+        uid_std_mean_ratios = []
+
+        # Store per-uid positive advantage stats
+        uid_pos_adv_means = []
+        uid_pos_adv_stds = []
+        uid_pos_adv_std_mean_ratios = []
+        uid_pos_adv_ratios = []  # 追加: プロンプトごとの正のアドバンテージの割合
+
+        for uid in unique_uids:
+            # Get indices for this uid within this data source
+            uid_indices = [i for i, u in enumerate(source_uids) if u == uid]
+            uid_source_indices = [source_indices[i] for i in uid_indices]
+            uid_lengths = response_length_np[uid_source_indices]
+            uid_advs = seq_advs_np[uid_source_indices]
+
+            # Skip if less than 2 samples (can't compute meaningful std)
+            if len(uid_lengths) < 2:
+                continue
+
+            # Overall stats for this UID
+            uid_mean = float(np.mean(uid_lengths))
+            uid_std = float(np.std(uid_lengths))
+            uid_std_mean_ratio = uid_std / (uid_mean + 1e-5)  # σ/μ
+
+            uid_means.append(uid_mean)
+            uid_stds.append(uid_std)
+            uid_std_mean_ratios.append(uid_std_mean_ratio)
+
+            # Positive advantage ratio for this UID
+            pos_adv_ratio = float(np.mean(uid_advs > 0))
+            uid_pos_adv_ratios.append(pos_adv_ratio)
+
+            # Positive advantage samples for this UID
+            pos_adv_mask = uid_advs > 0
+            pos_count = np.sum(pos_adv_mask)
+            # Include cases with 1 positive sample (mean = sample value, std = 0)
+            if pos_count >= 1:
+                pos_lengths = uid_lengths[pos_adv_mask]
+                pos_mean = float(np.mean(pos_lengths))
+                # If only 1 sample, std is 0
+                pos_std = float(np.std(pos_lengths)) if pos_count > 1 else 0.0
+                pos_std_mean_ratio = pos_std / (pos_mean + 1e-5)  # σ/μ
+
+                uid_pos_adv_means.append(pos_mean)
+                uid_pos_adv_stds.append(pos_std)
+                uid_pos_adv_std_mean_ratios.append(pos_std_mean_ratio)
+
+        # Calculate statistics of per-uid metrics
+        if len(uid_means) > 0:
+            metrics[f"by_source/{source}/prompt_length_mean/mean"] = float(np.mean(uid_means))
+            metrics[f"by_source/{source}/prompt_length_mean/median"] = float(np.median(uid_means))
+            metrics[f"by_source/{source}/prompt_length_mean/min"] = float(np.min(uid_means))
+            metrics[f"by_source/{source}/prompt_length_mean/max"] = float(np.max(uid_means))
+
+        if len(uid_stds) > 0:
+            metrics[f"by_source/{source}/prompt_length_std/mean"] = float(np.mean(uid_stds))
+            metrics[f"by_source/{source}/prompt_length_std/median"] = float(np.median(uid_stds))
+            metrics[f"by_source/{source}/prompt_length_std/min"] = float(np.min(uid_stds))
+            metrics[f"by_source/{source}/prompt_length_std/max"] = float(np.max(uid_stds))
+
+        if len(uid_std_mean_ratios) > 0:
+            metrics[f"by_source/{source}/prompt_std_mean_ratio/mean"] = float(np.mean(uid_std_mean_ratios))
+            metrics[f"by_source/{source}/prompt_std_mean_ratio/median"] = float(np.median(uid_std_mean_ratios))
+            metrics[f"by_source/{source}/prompt_std_mean_ratio/min"] = float(np.min(uid_std_mean_ratios))
+            metrics[f"by_source/{source}/prompt_std_mean_ratio/max"] = float(np.max(uid_std_mean_ratios))
+
+        # Positive advantage ratio statistics across prompts
+        if len(uid_pos_adv_ratios) > 0:
+            metrics[f"by_source/{source}/prompt_pos_adv_ratio/mean"] = float(np.mean(uid_pos_adv_ratios))
+            metrics[f"by_source/{source}/prompt_pos_adv_ratio/median"] = float(np.median(uid_pos_adv_ratios))
+            metrics[f"by_source/{source}/prompt_pos_adv_ratio/min"] = float(np.min(uid_pos_adv_ratios))
+            metrics[f"by_source/{source}/prompt_pos_adv_ratio/max"] = float(np.max(uid_pos_adv_ratios))
+
+        # Positive advantage length statistics across prompts
+        if len(uid_pos_adv_means) > 0:
+            metrics[f"by_source/{source}/prompt_pos_adv_length_mean/mean"] = float(np.mean(uid_pos_adv_means))
+            metrics[f"by_source/{source}/prompt_pos_adv_length_mean/median"] = float(np.median(uid_pos_adv_means))
+            metrics[f"by_source/{source}/prompt_pos_adv_length_mean/min"] = float(np.min(uid_pos_adv_means))
+            metrics[f"by_source/{source}/prompt_pos_adv_length_mean/max"] = float(np.max(uid_pos_adv_means))
+
+        if len(uid_pos_adv_stds) > 0:
+            metrics[f"by_source/{source}/prompt_pos_adv_length_std/mean"] = float(np.mean(uid_pos_adv_stds))
+            metrics[f"by_source/{source}/prompt_pos_adv_length_std/median"] = float(np.median(uid_pos_adv_stds))
+            metrics[f"by_source/{source}/prompt_pos_adv_length_std/min"] = float(np.min(uid_pos_adv_stds))
+            metrics[f"by_source/{source}/prompt_pos_adv_length_std/max"] = float(np.max(uid_pos_adv_stds))
+
+        if len(uid_pos_adv_std_mean_ratios) > 0:
+            metrics[f"by_source/{source}/prompt_pos_adv_std_mean_ratio/mean"] = float(
+                np.mean(uid_pos_adv_std_mean_ratios)
+            )
+            metrics[f"by_source/{source}/prompt_pos_adv_std_mean_ratio/median"] = float(
+                np.median(uid_pos_adv_std_mean_ratios)
+            )
+            metrics[f"by_source/{source}/prompt_pos_adv_std_mean_ratio/min"] = float(
+                np.min(uid_pos_adv_std_mean_ratios)
+            )
+            metrics[f"by_source/{source}/prompt_pos_adv_std_mean_ratio/max"] = float(
+                np.max(uid_pos_adv_std_mean_ratios)
+            )
+
+    return metrics
+
+
 def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str, Any]:
     """
     Computes various metrics from a batch of data for PPO training.
@@ -304,6 +471,7 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         "prompt_length/std": torch.std(prompt_length).detach().item(),
     }
     metrics.update(reward_extra_metrics)
+    metrics.update(compute_grouped_length_metrics(batch))
 
     # multi-turn conversation
     if "__num_turns__" in batch.non_tensor_batch:
