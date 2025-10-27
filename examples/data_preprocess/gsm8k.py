@@ -34,19 +34,25 @@ def extract_solution(solution_str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--local_dir", default="~/data/gsm8k")
+    parser.add_argument("--local_dir", default="./data/gsm8k")
     parser.add_argument("--hdfs_dir", default=None)
+    parser.add_argument("--boxed", action="store_true", help="whether to use boxed answer format")
 
     args = parser.parse_args()
 
     data_source = "openai/gsm8k"
 
     dataset = datasets.load_dataset(data_source, "main")
+    if args.boxed:
+        data_source = "openai/gsm8k_boxed"
 
     train_dataset = dataset["train"]
     test_dataset = dataset["test"]
 
-    instruction_following = 'Let\'s think step by step and output the final answer after "####".'
+    if args.boxed:
+        instruction_following = "Let's think step by step and output the final answer in \\boxed{...}."
+    else:
+        instruction_following = 'Let\'s think step by step and output the final answer after "####".'
 
     # add a row to each data item that represents a unique id
     def make_map_fn(split):
@@ -68,10 +74,11 @@ if __name__ == "__main__":
                 "ability": "math",
                 "reward_model": {"style": "rule", "ground_truth": solution},
                 "extra_info": {
-                    "split": split,
-                    "index": idx,
-                    "answer": answer_raw,
-                    "question": question_raw,
+                    # "split": split,
+                    # "index": idx,
+                    "index": str(idx) if split == "train" else idx,
+                    # "answer": answer_raw,
+                    # "question": question_raw,
                 },
             }
             return data
@@ -84,6 +91,8 @@ if __name__ == "__main__":
     local_dir = args.local_dir
     hdfs_dir = args.hdfs_dir
 
+    if args.boxed:
+        local_dir = local_dir + "_boxed"
     train_dataset.to_parquet(os.path.join(local_dir, "train.parquet"))
     test_dataset.to_parquet(os.path.join(local_dir, "test.parquet"))
 
