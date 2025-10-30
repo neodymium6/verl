@@ -52,6 +52,15 @@ class PolicyLossConfig(BaseConfig):
 
 
 @dataclass
+class DrpoConfig(BaseConfig):
+    kl_type: str = "kl"
+    delta: float = 1e-4
+    beta: float = 1e3
+    tau: float = 10
+    Lambda: float = 0.1
+
+
+@dataclass
 class ActorConfig(BaseConfig):
     """Configuration for actor model training.
 
@@ -120,6 +129,7 @@ class ActorConfig(BaseConfig):
     data_loader_seed = 1
     n: int = 1  # must be override by sampling config
     model_config: HFModelConfig = field(default_factory=BaseConfig)
+    drpo: DrpoConfig = field(default_factory=DrpoConfig)
 
     def __post_init__(self):
         """Validate actor configuration parameters."""
