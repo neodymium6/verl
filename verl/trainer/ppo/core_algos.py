@@ -29,6 +29,7 @@ import torch
 from omegaconf import DictConfig
 
 import verl.utils.torch_functional as verl_F
+from verl.protocol import DataProto
 from verl.trainer.config import AlgoConfig
 from verl.utils.import_utils import deprecated
 from verl.workers.config import ActorConfig
@@ -95,7 +96,6 @@ class AdvantageEstimator(str, Enum):
 
     GAE = "gae"
     GRPO = "grpo"
-    GFPO = "gfpo"
     REINFORCE_PLUS_PLUS = "reinforce_plus_plus"
     REINFORCE_PLUS_PLUS_BASELINE = "reinforce_plus_plus_baseline"
     REMAX = "remax"
@@ -518,102 +518,131 @@ def compute_grpo_outcome_advantage(
     return scores, scores, metrics
 
 
-@register_adv_est(AdvantageEstimator.GFPO)
-def compute_gfpo_outcome_advantage(
-    token_level_rewards: torch.Tensor,
-    response_mask: torch.Tensor,
-    index: np.ndarray,
-    config: AlgoConfig,
-    epsilon: float = 1e-6,
-    norm_adv_by_std_in_grpo: bool = True,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Compute advantage for GFPO, operating only on Outcome reward
-    (with only one scalar reward for each response).
+import statistics
 
+
+# compute_score for GFPO
+def compute_scores(
+    data: DataProto,
+    metric: str = "response length",
+    metric_name: str = "token_level_scores",
+    adaptive: bool = False,
+):
+    """Implementation of computing scores.
+    See more description in https://arxiv.org/pdf/2508.09726.
     Args:
-        token_level_rewards: `(torch.Tensor)`
-            shape is (bs, response_length)
-        response_mask: `(torch.Tensor)`
-            shape is (bs, response_length)
-        index: `(np.ndarray)`
-            index array for grouping
-        epsilon: `(float)`
-            small value to avoid division by zero
-        norm_adv_by_std_in_grpo: `(bool)`
-            whether to scale the GRPO advantage
-        config: `(Optional[AlgoConfig])`
-            algorithm configuration object
-
-    Note:
-        If norm_adv_by_std_in_grpo is True, the advantage is scaled by the std, as in the original GRPO.
-        If False, the advantage is not scaled, as in Dr.GRPO (https://arxiv.org/abs/2503.20783).
-
+         data(DataProto): The data containing batched model outputs and inputs.
+         metric: The metric (e.g., response length, token efficiency) aimed at reducing response length inflation. Defaults to response length.
+         metric_name: The metric (e.g., token_level_rewards, token_level_scores) for the reward. Defaults to token_level_scores.
+         adaptive(bool, optional): Adaptive difficulty to allocate more training signal to harder questions. Defaults to False.
     Returns:
-        advantages: `(torch.Tensor)`
-            shape is (bs, response_length)
-        Returns: `(torch.Tensor)`
-            shape is (bs, response_length)
+         id2response_and_score: The score of the corresponding set of responses for each prompt.
+         id2average_reward: The average reward of the corresponding set of responses for each prompt.
     """
-    scores = token_level_rewards.sum(dim=-1)
-    valid_length_list = response_mask.sum(dim=1).detach().cpu().numpy().tolist()
-    gfpo_config = config.get("gfpo", None)
-    assert gfpo_config is not None, "gfpo config must be provided for gfpo advantage"
-    gfpo_k = gfpo_config.get("gfpo_k", None)
-    assert gfpo_k is not None and gfpo_k > 0, "gfpo_k must be provided and larger than 0 for gfpo advantage"
 
-    id2length = defaultdict(list)
-    id2indices = defaultdict(list)
-    for i in range(len(valid_length_list)):
-        id2length[index[i]].append(valid_length_list[i])
-        id2indices[index[i]].append(i)
+    response_mask = data.batch["response_mask"]
+    response_length = response_mask.sum(dim=-1)
+    index = data.non_tensor_batch["uid"]
+    # id2response_and_score = defaultdict(list)
+    # uid to list of (response index in batch, score)
+    id2response_and_score: dict[str, list[tuple[int, float | int]]] = defaultdict(list)
+    bsz = response_mask.shape[0]
 
-    rejection_mask = [False] * len(scores)
+    if metric == "token efficiency" or adaptive:
+        reward_value = data.batch[metric_name].sum(dim=-1).numpy()
 
-    for prompt_id in id2indices:
-        indices = id2indices[prompt_id]
-        lengths = id2length[prompt_id]
-        assert len(indices) >= gfpo_k, (
-            f"gfpo_k={gfpo_k} is larger than the number of samples={len(indices)} for prompt_id={prompt_id}"
-        )
-        sorted_indices = [idx for _len, idx in sorted(zip(lengths, indices, strict=True), key=lambda pair: pair[0])][
-            :gfpo_k
-        ]
-        for idx in sorted_indices:
-            rejection_mask[idx] = True
-
-    id2score = defaultdict(list)
-    id2mean = {}
-    id2std = {}
-
-    for i in range(len(scores)):
-        if rejection_mask[i]:
-            id2score[index[i]].append(scores[i])
-
-    with torch.no_grad():
-        bsz = scores.shape[0]
-        for idx in id2score:
-            if len(id2score[idx]) == 1:
-                id2mean[idx] = torch.tensor(0.0)
-                id2std[idx] = torch.tensor(1.0)
-            elif len(id2score[idx]) > 1:
-                scores_tensor = torch.stack(id2score[idx])
-                id2mean[idx] = torch.mean(scores_tensor)
-                id2std[idx] = torch.std(scores_tensor)
-            else:
-                raise ValueError(f"no score in prompt index: {idx}")
+    if metric == "response length":
         for i in range(bsz):
-            if not rejection_mask[i]:
-                scores[i] = 0.0
-                continue
-            if norm_adv_by_std_in_grpo:
-                scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
+            id2response_and_score[index[i]].append((i, response_length[i]))
+    elif metric == "token efficiency":
+        for i in range(bsz):
+            id2response_and_score[index[i]].append((i, -reward_value[i] / (response_length[i] + 1e-8)))
+    else:
+        raise NotImplementedError(
+            f"Metric {metric} not implemented in compute_scores. Supported metrics are response length and token efficiency."
+        )
+    for id in id2response_and_score.keys():
+        # sorted
+        # response length : from shortest to longest
+        # token efficiency: from higheest token efficiency to lowest efficiency
+        id2response_and_score[id] = sorted(id2response_and_score[id], key=lambda x: x[1])
+
+    if adaptive:
+        id2average_reward = {}
+        id2reward = defaultdict(list)
+        for i in range(bsz):
+            id2reward[index[i]].append(reward_value[i])
+        for id in id2reward:
+            id2average_reward[id] = statistics.mean(id2reward[id])
+
+        return id2response_and_score, id2average_reward
+    return id2response_and_score, None
+
+
+# filtering for GFPO
+from tdigest import TDigest
+
+
+def filtering_sampling(
+    data: DataProto,
+    metric: str = "response_length",
+    metric_name: str = "token_level_scores",
+    retain_count: int = 8,
+    adaptive: bool = False,
+    t_digest: TDigest | None = None,
+    easy_count: int | None = None,
+    medium_count: int | None = None,
+    hard_count: int | None = None,
+    very_hard_count: int | None = None,
+) -> list[int]:
+    """Implementation of filtering sampling strategy for Group Filtered Policy Optimization (GFPO).
+    See more description in https://arxiv.org/pdf/2508.09726.
+    Args:
+        data(DataProto): The data containing batched model outputs and inputs.
+        metric: The metric (e.g., response length, token efficiency) aimed at reducing response length inflation. Defaults to response length.
+        metric_name: The metric (e.g., token_level_rewards, token_level_scores) for the reward. Defaults to token_level_scores.
+        retain_count(int, optional): The size of most desirable responses to tain on.Defaults to 8.
+        adaptive(bool, optional): Adaptive difficulty to allocate more training signal to harder questions. Defaults to False.
+        t_digest(TDigest, optional): TDigest is a data structure designed for efficient and accurate estimation of percentiles, quantiles, and other statistical metrics from streaming or distributed data. Defaults to None.
+        easy_count(int, optional): A target number of retained responses for easy question. Defaults to None.
+        medium_count(int, optional): A target number of retained responses for medium question. Defaults to None.
+        hard_count(int, optional): A target number of retained responses for hard question. Defaults to None.
+        very_hard_count(int, optional): A target number of retained responses for very hard question. Defaults to None.
+    Returns:
+        kept_traj_idxs: the desirable responses to train on.
+    """
+    id2response_and_score, id2average_reward = compute_scores(
+        data,
+        metric,
+        metric_name,
+        adaptive,
+    )
+    kept_traj_idxs = []
+    if adaptive:
+        # dict[id: average reward] -> list of average rewards
+        mean_rewards = [id2average_reward[id] for id in id2average_reward]
+        assert t_digest is not None, "t_digest must be provided for adaptive filtering sampling"
+        t_digest.batch_update(mean_rewards)
+        p_25, p_50, p_75 = t_digest.percentile(0.25), t_digest.percentile(0.5), t_digest.percentile(0.75)
+        for id in id2response_and_score.keys():
+            mean_reward = id2average_reward[id]
+            id_score = id2response_and_score[id]
+            if mean_reward < p_25:
+                count = very_hard_count
+            elif mean_reward < p_50:
+                count = hard_count
+            elif mean_reward < p_75:
+                count = medium_count
             else:
-                scores[i] = scores[i] - id2mean[index[i]]
-
-        scores = scores.unsqueeze(-1) * response_mask
-
-    return scores, scores
+                count = easy_count
+            for i in range(min(count, len(id_score))):
+                kept_traj_idxs.append(id_score[i][0])
+    else:
+        for id in id2response_and_score.keys():
+            id_score = id2response_and_score[id]
+            for i in range(min(retain_count, len(id_score))):
+                kept_traj_idxs.append(id_score[i][0])
+    return kept_traj_idxs
 
 
 @register_adv_est(AdvantageEstimator.GRPO_PASSK)  # or simply: @register_adv_est("grpo_passk")

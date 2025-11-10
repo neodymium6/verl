@@ -33,9 +33,16 @@ algorithm:
     dual_agg_beta: 0.0
     dual_agg_use_harmonic_mean: False
     use_virtual_correct: False
-  gfpo:
-    gfpo_k: 8
   use_prompt_mean_adv: False
+  filter_sample:
+    enable: False
+    metric: "response length"
+    retain_count: 8
+    adaptive: False
+    easy_count: 8
+    medium_count: 8
+    hard_count: 8
+    very_hard_count: 8
 
 actor_rollout_ref:
   rollout:

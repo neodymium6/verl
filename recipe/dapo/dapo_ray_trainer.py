@@ -24,10 +24,11 @@ from pprint import pprint
 
 import numpy as np
 import torch
+from tdigest import TDigest
 from tqdm import tqdm
 
 from verl import DataProto
-from verl.trainer.ppo.core_algos import agg_loss
+from verl.trainer.ppo.core_algos import agg_loss, filtering_sampling
 from verl.trainer.ppo.metric_utils import (
     compute_data_metrics,
     compute_throughout_metrics,
@@ -109,6 +110,10 @@ class RayDAPOTrainer(RayPPOTrainer):
         reward_extra_infos_dict = None
         num_prompt_in_batch = 0
         num_gen_batches = 0
+        if self.config.algorithm.filter_sample.enable:
+            t_digest = TDigest()
+        else:
+            t_digest = None
         for epoch in range(self.config.trainer.total_epochs):
             for batch_dict in self.train_dataloader:
                 metrics = {}
@@ -244,6 +249,29 @@ class RayDAPOTrainer(RayPPOTrainer):
                             )  # TODO: This will be cleared if we use multiple genenration batches
                         else:
                             new_batch.batch["token_level_rewards"] = new_batch.batch["token_level_scores"]
+
+                    # filtering samples if needed for GFPO
+                    if self.config.algorithm.filter_sample.enable:
+                        new_batch.batch["response_mask"] = compute_response_mask(new_batch)
+                        filtering_sampling_kept_traj_idxs = filtering_sampling(
+                            new_batch,
+                            metric=self.config.algorithm.filter_sample.metric,
+                            metric_name="token_level_scores",
+                            retain_count=self.config.algorithm.filter_sample.retain_count,
+                            adaptive=self.config.algorithm.filter_sample.adaptive,
+                            t_digest=t_digest,
+                            easy_count=self.config.algorithm.filter_sample.easy_count,
+                            medium_count=self.config.algorithm.filter_sample.medium_count,
+                            hard_count=self.config.algorithm.filter_sample.hard_count,
+                            very_hard_count=self.config.algorithm.filter_sample.very_hard_count,
+                        )
+                        print(f"Filtering sampling: from {len(new_batch)} to {len(filtering_sampling_kept_traj_idxs)}")
+                        print(f"{filtering_sampling_kept_traj_idxs=}")
+                        new_batch = new_batch[filtering_sampling_kept_traj_idxs]
+                        new_reward_extra_infos_dict = {
+                            k: [v[i] for i in filtering_sampling_kept_traj_idxs]
+                            for k, v in new_reward_extra_infos_dict.items()
+                        }
 
                     if not self.config.algorithm.filter_groups.enable:
                         batch = new_batch
