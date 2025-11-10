@@ -96,7 +96,6 @@ class AdvantageEstimator(str, Enum):
 
     GAE = "gae"
     GRPO = "grpo"
-    GFPO = "gfpo"
     REINFORCE_PLUS_PLUS = "reinforce_plus_plus"
     REINFORCE_PLUS_PLUS_BASELINE = "reinforce_plus_plus_baseline"
     REMAX = "remax"
@@ -517,104 +516,6 @@ def compute_grpo_outcome_advantage(
         scores = scores.unsqueeze(-1) * response_mask
 
     return scores, scores, metrics
-
-
-@register_adv_est(AdvantageEstimator.GFPO)
-def compute_gfpo_outcome_advantage(
-    token_level_rewards: torch.Tensor,
-    response_mask: torch.Tensor,
-    index: np.ndarray,
-    config: AlgoConfig,
-    epsilon: float = 1e-6,
-    norm_adv_by_std_in_grpo: bool = True,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Compute advantage for GFPO, operating only on Outcome reward
-    (with only one scalar reward for each response).
-
-    Args:
-        token_level_rewards: `(torch.Tensor)`
-            shape is (bs, response_length)
-        response_mask: `(torch.Tensor)`
-            shape is (bs, response_length)
-        index: `(np.ndarray)`
-            index array for grouping
-        epsilon: `(float)`
-            small value to avoid division by zero
-        norm_adv_by_std_in_grpo: `(bool)`
-            whether to scale the GRPO advantage
-        config: `(Optional[AlgoConfig])`
-            algorithm configuration object
-
-    Note:
-        If norm_adv_by_std_in_grpo is True, the advantage is scaled by the std, as in the original GRPO.
-        If False, the advantage is not scaled, as in Dr.GRPO (https://arxiv.org/abs/2503.20783).
-
-    Returns:
-        advantages: `(torch.Tensor)`
-            shape is (bs, response_length)
-        Returns: `(torch.Tensor)`
-            shape is (bs, response_length)
-    """
-    scores = token_level_rewards.sum(dim=-1)
-    valid_length_list = response_mask.sum(dim=1).detach().cpu().numpy().tolist()
-    gfpo_config = config.get("gfpo", None)
-    assert gfpo_config is not None, "gfpo config must be provided for gfpo advantage"
-    gfpo_k = gfpo_config.get("gfpo_k", None)
-    assert gfpo_k is not None and gfpo_k > 0, "gfpo_k must be provided and larger than 0 for gfpo advantage"
-
-    id2length = defaultdict(list)
-    id2indices = defaultdict(list)
-    for i in range(len(valid_length_list)):
-        id2length[index[i]].append(valid_length_list[i])
-        id2indices[index[i]].append(i)
-
-    rejection_mask = [False] * len(scores)
-
-    for prompt_id in id2indices:
-        indices = id2indices[prompt_id]
-        lengths = id2length[prompt_id]
-        assert len(indices) >= gfpo_k, (
-            f"gfpo_k={gfpo_k} is larger than the number of samples={len(indices)} for prompt_id={prompt_id}"
-        )
-        sorted_indices = [idx for _len, idx in sorted(zip(lengths, indices, strict=True), key=lambda pair: pair[0])][
-            :gfpo_k
-        ]
-        for idx in sorted_indices:
-            rejection_mask[idx] = True
-
-    id2score = defaultdict(list)
-    id2mean = {}
-    id2std = {}
-
-    for i in range(len(scores)):
-        if rejection_mask[i]:
-            id2score[index[i]].append(scores[i])
-
-    with torch.no_grad():
-        bsz = scores.shape[0]
-        for idx in id2score:
-            if len(id2score[idx]) == 1:
-                id2mean[idx] = torch.tensor(0.0)
-                id2std[idx] = torch.tensor(1.0)
-            elif len(id2score[idx]) > 1:
-                scores_tensor = torch.stack(id2score[idx])
-                id2mean[idx] = torch.mean(scores_tensor)
-                id2std[idx] = torch.std(scores_tensor)
-            else:
-                raise ValueError(f"no score in prompt index: {idx}")
-        for i in range(bsz):
-            if not rejection_mask[i]:
-                scores[i] = 0.0
-                continue
-            if norm_adv_by_std_in_grpo:
-                scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
-            else:
-                scores[i] = scores[i] - id2mean[index[i]]
-
-        scores = scores.unsqueeze(-1) * response_mask
-
-    return scores, scores
 
 
 import statistics
