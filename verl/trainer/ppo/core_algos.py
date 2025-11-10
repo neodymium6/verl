@@ -1217,10 +1217,24 @@ def compute_policy_loss_vanilla(
     pg_losses = torch.where(advantages < 0, clip_pg_losses2, clip_pg_losses1)
 
     if config.tis_imp_ratio_cap > 0 and rollout_log_probs is not None:
-        # Apply truncated importance sampling -> https://fengyao.notion.site/off-policy-rl
-        tis_imp_ratio = torch.exp(old_log_prob - rollout_log_probs)
-        tis_imp_ratio = torch.clamp(tis_imp_ratio, max=config.tis_imp_ratio_cap)
-        pg_losses = pg_losses * tis_imp_ratio
+        if config.tis_mode == "token-tis":
+            # Apply truncated importance sampling -> https://fengyao.notion.site/off-policy-rl
+            tis_imp_ratio = torch.exp(old_log_prob - rollout_log_probs)
+            tis_imp_ratio = torch.clamp(tis_imp_ratio, max=config.tis_imp_ratio_cap)
+            pg_losses = pg_losses * tis_imp_ratio
+        elif config.tis_mode == "seq-tis":
+            log_seq_iw = (old_log_prob - rollout_log_probs) * response_mask
+            log_seq_iw = log_seq_iw.sum(dim=-1, keepdim=True)
+            seq_iw = torch.exp(log_seq_iw.clamp(max=20.0))  # clamp for numerical stability
+            pg_losses = pg_losses * seq_iw.clamp(max=config.tis_imp_ratio_cap)
+        elif config.tis_mode == "seq-mis":
+            log_seq_iw = (old_log_prob - rollout_log_probs) * response_mask
+            log_seq_iw = log_seq_iw.sum(dim=-1, keepdim=True)
+            seq_iw = torch.exp(log_seq_iw.clamp(max=20.0))
+            clip_mask = (seq_iw <= config.tis_imp_ratio_cap).float()
+            pg_losses = pg_losses * seq_iw.clamp(max=config.tis_imp_ratio_cap) * clip_mask
+        else:
+            raise ValueError(f"Invalid tis_mode: {config.tis_mode}")
 
     mode_mask: list[str] = []
     for adv in advantages:

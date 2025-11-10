@@ -106,6 +106,7 @@ class ActorConfig(BaseConfig):
     loss_agg_mode: str = "token-mean"
     entropy_coeff: float = 0
     tis_imp_ratio_cap: float = -1
+    tis_mode: str = "token-tis"
     use_kl_loss: bool = False
     use_torch_compile: bool = True
     kl_loss_coef: float = 0.001
@@ -152,6 +153,14 @@ class ActorConfig(BaseConfig):
         ]
         if self.loss_agg_mode not in valid_loss_agg_modes:
             raise ValueError(f"Invalid loss_agg_mode: {self.loss_agg_mode}")
+
+        valid_tis_modes = [
+            "token-tis",
+            "seq-tis",
+            "seq-mis",
+        ]
+        if self.tis_mode not in valid_tis_modes:
+            raise ValueError(f"Invalid tis_mode: {self.tis_mode}")
 
     def validate(self, n_gpus: int, train_batch_size: int, model_config: dict = None):
         """Validate actor configuration with runtime parameters."""
