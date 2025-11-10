@@ -35,6 +35,7 @@ algorithm:
     use_virtual_correct: False
   gfpo:
     gfpo_k: 8
+  use_prompt_mean_adv: False
 
 actor_rollout_ref:
   rollout:

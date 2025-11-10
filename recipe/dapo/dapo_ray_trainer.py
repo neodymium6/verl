@@ -438,6 +438,12 @@ class RayDAPOTrainer(RayPPOTrainer):
                     with marked_timer("adv", timing_raw, "brown"):
                         # compute advantages, executed on the driver process
                         norm_adv_by_std_in_grpo = self.config.algorithm.get("norm_adv_by_std_in_grpo", True)
+                        use_prompt_mean_adv = self.config.algorithm.get("use_prompt_mean_adv", False)
+                        loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode
+                        if use_prompt_mean_adv:
+                            assert loss_agg_mode == "prompt-mean", (
+                                f"When use_prompt_mean_adv, loss_agg_mode must be prompt-mean, got {loss_agg_mode}"
+                            )
                         batch, adv_metrics = compute_advantage(
                             batch,
                             adv_estimator=self.config.algorithm.adv_estimator,
@@ -462,6 +468,7 @@ class RayDAPOTrainer(RayPPOTrainer):
                         with marked_timer("update_actor", timing_raw, "red"):
                             response_masks = batch.batch["response_mask"]
                             batch.meta_info["response_lengths"] = response_masks.sum(dim=1).cpu().numpy()
+                            batch.meta_info["group_size"] = self.config.actor_rollout_ref.rollout.n
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                         metrics.update(actor_output_metrics)

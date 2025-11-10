@@ -389,6 +389,16 @@ def compute_grpo_outcome_advantage(
                 scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
             else:
                 scores[i] = scores[i] - id2mean[index[i]]
+        if config.get("use_prompt_mean_adv", False):
+            # DAPO's prompt average advantage normalization
+            # this is used with prompt-mean loss_agg_mode
+            valid_length_list = response_mask.sum(dim=1).detach().cpu().numpy().tolist()
+            id2length = defaultdict(list)
+            for i in range(bsz):
+                id2length[index[i]].append(valid_length_list[i])
+            id2length_sum = {idx: sum(lengths) for idx, lengths in id2length.items()}
+            for i in range(bsz):
+                scores[i] = scores[i] / id2length_sum[index[i]]
 
         if custom_adv_config is not None and custom_adv_config.get("use_delta_l", False):
             alpha = custom_adv_config.get("delta_l_alpha", 1.0)
@@ -1042,6 +1052,10 @@ def agg_loss(
                 mode_loss_mask,
                 loss_agg_mode=mode,
             ) * (mode_sum_tokens / sum_tokens)
+    elif loss_agg_mode == "prompt-mean":
+        # DAPO style aggregation:
+        # advantages are averaged over all responses from the same prompt, then only summed over tokens
+        loss = verl_F.masked_sum(loss_mat, loss_mask)
     else:
         raise ValueError(f"Invalid loss_agg_mode: {loss_agg_mode}")
 

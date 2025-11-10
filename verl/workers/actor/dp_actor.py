@@ -396,6 +396,15 @@ class DataParallelPPOActor(BasePPOActor):
                     )
                     mb_lengths = [rank_lengths[j] for j in mb_indecis]
                     dp_length_list[rank_i].append(mb_lengths)
+        elif loss_agg_mode == "prompt-mean":
+            assert len(data) == self.config.ppo_mini_batch_size, (
+                f"data length {len(data)} != ppo_mini_batch_size {self.config.ppo_mini_batch_size}, "
+                "prompt-mean currently only supports single mini-batch."
+            )
+            n_trajs = len(data)
+            group_size = data.meta_info["group_size"]
+            # number of groups (N) in the mini-batch
+            n_groups = n_trajs // group_size
 
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid silent error
 
@@ -470,6 +479,8 @@ class DataParallelPPOActor(BasePPOActor):
                         max_token_len = response_mask.shape[1]
                         max_token_sqrt = (dp_size * ppo_mini_batch_size * max_token_len) ** 0.5
                         loss_scale_factor = dp_size * micro_batch_length_sum / (mini_batch_length_sqrt * max_token_sqrt)
+                    elif loss_agg_mode == "prompt-mean":
+                        loss_scale_factor = 1 / n_groups
                     elif self.config.use_dynamic_bsz:
                         loss_scale_factor = response_mask.shape[0] / self.config.ppo_mini_batch_size
                     else:
