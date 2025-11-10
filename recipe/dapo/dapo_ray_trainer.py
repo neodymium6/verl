@@ -265,8 +265,6 @@ class RayDAPOTrainer(RayPPOTrainer):
                             hard_count=self.config.algorithm.filter_sample.hard_count,
                             very_hard_count=self.config.algorithm.filter_sample.very_hard_count,
                         )
-                        print(f"Filtering sampling: from {len(new_batch)} to {len(filtering_sampling_kept_traj_idxs)}")
-                        print(f"{filtering_sampling_kept_traj_idxs=}")
                         new_batch = new_batch[filtering_sampling_kept_traj_idxs]
                         new_reward_extra_infos_dict = {
                             k: [v[i] for i in filtering_sampling_kept_traj_idxs]
