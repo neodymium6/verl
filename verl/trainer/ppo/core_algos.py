@@ -1288,8 +1288,6 @@ def compute_policy_loss_drpo(
         if rollout_log_probs is not None:
             global_rollout_log_probs = rollout_log_probs
 
-    with open("tmp.txt", "a") as f:
-        f.write("all_gathered\n")
     device = global_rewards.device
     global_uid_raw = global_uid
     uid_hashes = []
