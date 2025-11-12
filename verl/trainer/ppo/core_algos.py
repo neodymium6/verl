@@ -1234,11 +1234,6 @@ def compute_policy_loss_drpo(
     uid,
     config: DictConfig | AlgoConfig,
     rollout_log_probs: torch.Tensor | None = None,
-    # delta,
-    # beta,
-    # tau,
-    # Lambda,
-    # kl_type="low_var_kl",
 ):
     """
 
