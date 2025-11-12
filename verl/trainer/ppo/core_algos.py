@@ -1282,6 +1282,148 @@ def compute_policy_loss_vanilla(
     return pg_loss, pg_clipfrac, ppo_kl, pg_clipfrac_lower
 
 
+@register_policy_loss("drpo")
+def compute_policy_loss_drpo(
+    old_log_prob: torch.Tensor,
+    log_prob: torch.Tensor,
+    advantages: torch.Tensor,
+    response_mask: torch.Tensor,
+    uid,
+    config: DictConfig | AlgoConfig,
+    rollout_log_probs: torch.Tensor | None = None,
+):
+    """
+
+    Args:
+        old_log_prob: `(torch.Tensor)`
+            shape: (bs, response_length)
+        log_prob: `(torch.Tensor)`
+            shape: (bs, response_length)
+        advantages: `(torch.Tensor)`
+            shape: (bs, response_length)
+        response_mask: `(torch.Tensor)`
+            shape: (bs, response_length)
+        cliprange: (float)
+            The clip range used in PPO. See https://arxiv.org/abs/1707.06347
+
+    Returns:
+        pg_loss: `a scalar torch.Tensor`
+            policy gradient loss computed via PPO
+        pg_clipfrac: (float)
+            a float number indicating the fraction of policy gradient loss being clipped
+
+    """
+    first_values = advantages[:, 0]
+    seq_level_rewards = (first_values > 0).float()
+    drpo_cfg = config.get("drpo", None)
+    assert drpo_cfg is not None
+    delta = drpo_cfg.get("delta")
+    beta = drpo_cfg.get("beta")
+    tau = drpo_cfg.get("tau")
+    Lambda = drpo_cfg.get("Lambda")
+    kl_type = drpo_cfg.get("kl_type")
+
+    if torch.distributed.is_initialized():
+        global_old_log_prob = torch.cat(torch.distributed.nn.all_gather(old_log_prob), dim=0)
+        global_log_prob = torch.cat(torch.distributed.nn.all_gather(log_prob), dim=0)
+        global_eos_mask = torch.cat(torch.distributed.nn.all_gather(response_mask), dim=0)
+        global_uid = torch.cat(torch.distributed.nn.all_gather(uid), dim=0)
+        global_rewards = torch.cat(torch.distributed.nn.all_gather(seq_level_rewards), dim=0)
+        if rollout_log_probs is not None:
+            global_rollout_log_probs = torch.cat(torch.distributed.nn.all_gather(rollout_log_probs), dim=0)
+    else:
+        global_old_log_prob = old_log_prob
+        global_log_prob = log_prob
+        global_eos_mask = response_mask
+        global_uid = uid
+        global_rewards = seq_level_rewards
+        if rollout_log_probs is not None:
+            global_rollout_log_probs = rollout_log_probs
+
+    device = global_rewards.device
+    global_uid_raw = global_uid
+    uid_hashes = []
+    for uid_row in global_uid_raw:
+        uid_tuple = tuple(uid_row.cpu().numpy().tolist())
+        uid_hashes.append(hash(uid_tuple))
+
+    hash_to_group_id = {}
+    current_id = 0
+
+    global_uid = torch.zeros(len(uid_hashes), dtype=torch.long, device=device)
+
+    for i, h in enumerate(uid_hashes):
+        if h not in hash_to_group_id:
+            hash_to_group_id[h] = current_id
+            current_id += 1
+
+        global_uid[i] = hash_to_group_id[h]
+
+    #### do calculation
+    negative_approx_kl = global_log_prob - global_old_log_prob
+    ratio = torch.exp(negative_approx_kl)
+    if kl_type == "low_var_kl":
+        ppo_kl = verl_F.masked_mean(-negative_approx_kl + ratio - 1, global_eos_mask)
+    elif kl_type == "kl":
+        ppo_kl = verl_F.masked_mean(-negative_approx_kl, global_eos_mask)
+
+    global_scores = (global_log_prob * global_eos_mask).sum(dim=1) / global_eos_mask.sum(dim=1)  # [n,]
+    global_length_ratio = global_eos_mask.sum(dim=1) / global_eos_mask.size(-1)
+    ### group scores based on global_uid, we assume each question has same number of responses
+    sorted_uid, indices = global_uid.sort()
+    sorted_scores = global_scores[indices]
+    sorted_rewards = global_rewards[indices]
+    sorted_length_ratio = global_length_ratio[indices]
+    # print('###########sorted_uid', sorted_uid)
+
+    num_questions = global_uid.unique().numel()
+    num_responses_per_question = global_uid.size(0) // num_questions
+    grouped_scores = sorted_scores.view(num_questions, num_responses_per_question)
+    grouped_rewards = sorted_rewards.view(num_questions, num_responses_per_question)
+    grouped_length_ratio = sorted_length_ratio.view(num_questions, num_responses_per_question)
+
+    pos_mask = grouped_rewards == 1  # [nq, nr]
+    neg_mask = grouped_rewards == 0
+    #### remove all zeros and all ones
+    valid_mask = (pos_mask.sum(dim=1) != 0) & (neg_mask.sum(dim=1) != 0)
+
+    if valid_mask.sum() > 0:
+        grouped_scores = grouped_scores[valid_mask]
+        grouped_rewards = grouped_rewards[valid_mask]
+        grouped_length_ratio = grouped_length_ratio[valid_mask]
+        pos_mask = pos_mask[valid_mask]
+        neg_mask = neg_mask[valid_mask]
+
+        neg_scores_masked = (grouped_scores / tau).masked_fill(~neg_mask, float("-inf"))
+
+        # Compute stable max while keeping dimension
+        neg_max, _ = neg_scores_masked.max(dim=-1, keepdim=True)
+        # handle all-masked rows safely
+        neg_max = torch.where(neg_max == float("-inf"), torch.zeros_like(neg_max), neg_max)
+
+        # Subtract max, exponentiate, and apply mask
+        neg_exp = torch.exp(((grouped_scores / tau) - neg_max.detach()) * neg_mask) * neg_mask
+        neg_sum_exp = neg_exp.sum(dim=-1, keepdim=True)
+
+        neg_logmeanexp = neg_sum_exp / (neg_sum_exp.detach() + torch.finfo(neg_sum_exp.dtype).eps)
+
+        weight = torch.exp((1 - grouped_length_ratio) / Lambda)
+        pg_losses = (weight * (grouped_scores - tau * neg_logmeanexp) * pos_mask).sum(dim=1, keepdim=True) / (
+            weight * pos_mask
+        ).sum(dim=1, keepdim=True)
+
+        pg_loss = pg_losses.sum() / num_questions
+    else:
+        pg_loss = torch.tensor(0.0) * global_scores.mean()  ### dummy loss
+
+    constraint = torch.maximum(beta * (ppo_kl - delta), torch.zeros_like(ppo_kl)).detach() * ppo_kl
+
+    pg_loss = -pg_loss + constraint
+    pg_clipfrac = torch.gt(ppo_kl, delta).float()
+
+    return pg_loss, pg_clipfrac, ppo_kl
+
+
 @register_policy_loss("gspo")
 def compute_policy_loss_gspo(
     old_log_prob: torch.Tensor,

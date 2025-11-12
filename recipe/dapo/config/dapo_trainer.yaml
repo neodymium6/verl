@@ -48,6 +48,13 @@ actor_rollout_ref:
   rollout:
     val_kwargs:
       response_length: ${data.max_response_length}
+  actor:
+    drpo:
+      kl_type: kl
+      delta: 0.0001
+      beta: 1000
+      tau: 10
+      Lambda: 0.1
 
 trainer:
   project_name: verl-dapo
