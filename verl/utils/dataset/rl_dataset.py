@@ -129,10 +129,36 @@ class RLHFDataset(Dataset):
             self.data_files[i] = copy_to_local(src=parquet_file, cache_dir=self.cache_dir, use_shm=self.use_shm)
 
     def _read_files_and_tokenize(self):
+        import json
+
+        def normalize_data(example):
+            if "data" in example:
+                data = json.loads(example["data"])
+                for key, value in data.items():
+                    example[key] = value
+                del example["data"]
+            # dump code test cases to prevent issues in hf dataset (too nested structures)
+            if not isinstance(example["reward_model"]["ground_truth"], str):
+                example["reward_model"]["ground_truth"] = json.dumps(example["reward_model"]["ground_truth"])
+            return example
+
+        def map_fn(
+            dataset: datasets.Dataset,
+        ) -> datasets.Dataset:
+            processed_examples = []
+            for example in dataset:
+                processed_example = normalize_data(example)
+                processed_examples.append(processed_example)
+            del dataset
+            return datasets.Dataset.from_list(processed_examples)
+
         dataframes = []
         for parquet_file in self.data_files:
             # read parquet files and cache
             dataframe = datasets.load_dataset("parquet", data_files=parquet_file)["train"]
+            assert isinstance(dataframe, datasets.Dataset)
+            # dataframe = dataframe.map(normalize_data)
+            dataframe = map_fn(dataframe)
             dataframes.append(dataframe)
         self.dataframe: datasets.Dataset = datasets.concatenate_datasets(dataframes)
 

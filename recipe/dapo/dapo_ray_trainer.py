@@ -23,6 +23,7 @@ from copy import deepcopy
 from pprint import pprint
 
 import numpy as np
+import ray
 import torch
 from tdigest import TDigest
 from tqdm import tqdm
@@ -42,6 +43,7 @@ from verl.trainer.ppo.ray_trainer import (
     compute_advantage,
     compute_response_mask,
 )
+from verl.trainer.ppo.reward import compute_reward_chunk
 from verl.utils.profiler import marked_timer
 from verl.utils.rollout_skip import RolloutSkip
 
@@ -50,6 +52,72 @@ class RayDAPOTrainer(RayPPOTrainer):
     """
     Note that this trainer runs on the driver process on a single CPU/GPU node.
     """
+
+    def _check_reward_manager_parallel_safety(self):
+        """
+        Check if the current reward manager is safe for parallel processing.
+        Only allow specific reward managers that are known to be parallel-safe.
+        """
+        # List of reward managers that are safe for parallel processing
+        PARALLEL_SAFE_REWARD_MANAGERS = {
+            "dapo01",  # Safe: stateless computation, no global state
+            "dapo",  # Safe: stateless computation, no global state
+        }
+
+        reward_manager_name = self.config.reward_model.reward_manager
+
+        if reward_manager_name not in PARALLEL_SAFE_REWARD_MANAGERS:
+            raise AssertionError(
+                f"Reward manager '{reward_manager_name}' has not been verified for parallel safety. "
+                f"Only the following reward managers are approved for parallel processing: "
+                f"{sorted(PARALLEL_SAFE_REWARD_MANAGERS)}. "
+                f"To use '{reward_manager_name}' with parallel processing, please verify its safety and add it to "
+                f"PARALLEL_SAFE_REWARD_MANAGERS in _check_reward_manager_parallel_safety()."
+            )
+
+    def _compute_rewards_parallel(self, new_batch: DataProto, num_workers: int = 4):
+        """
+        Compute rewards in parallel using Ray workers.
+
+        Args:
+            new_batch: DataProto containing the batch data
+            num_workers: Number of parallel workers to use
+
+        Returns:
+            Tuple of (reward_tensor, reward_extra_infos_dict)
+        """
+        # Safety check: ensure reward manager is parallel-safe
+        self._check_reward_manager_parallel_safety()
+        # Split DataProto into chunks for parallel processing
+        data_chunks = new_batch.chunk(chunks=num_workers)
+
+        # Launch parallel reward computation
+        futures = []
+        for chunk in data_chunks:
+            future = compute_reward_chunk.remote(chunk, self.reward_fn)
+            futures.append(future)
+
+        # Collect results from all workers
+        chunk_results = ray.get(futures)
+
+        # Combine results from all chunks
+        all_reward_tensors = []
+        all_extra_infos = []
+
+        for reward_tensor, extra_info in chunk_results:
+            all_reward_tensors.append(reward_tensor)
+            all_extra_infos.append(extra_info)
+
+        # Concatenate reward tensors
+        final_reward_tensor = torch.cat(all_reward_tensors, dim=0)
+
+        # Merge extra info dictionaries
+        final_extra_info = defaultdict(list)
+        for extra_info in all_extra_infos:
+            for key, values in extra_info.items():
+                final_extra_info[key].extend(values)
+
+        return final_reward_tensor, dict(final_extra_info)
 
     def fit(self):
         """
@@ -183,14 +251,22 @@ class RayDAPOTrainer(RayPPOTrainer):
 
                         # we combine with rule-based rm
                         new_reward_extra_infos_dict: dict[str, list]
-                        try:
-                            reward_result = self.reward_fn(new_batch, return_dict=True)
-                            reward_tensor = reward_result["reward_tensor"]
-                            new_reward_extra_infos_dict = reward_result.get("reward_extra_info", {})
-                        except Exception as e:
-                            print(f"Error in reward_fn: {e}")
-                            reward_tensor = self.reward_fn(new_batch)
-                            new_reward_extra_infos_dict = {}
+
+                        # Check if parallel reward computation is enabled
+                        if self.config.reward_model.get("enable_parallel", False):
+                            num_workers = self.config.reward_model.get("num_reward_workers", 4)
+                            reward_tensor, new_reward_extra_infos_dict = self._compute_rewards_parallel(
+                                new_batch, num_workers
+                            )
+                        else:
+                            try:
+                                reward_result = self.reward_fn(new_batch, return_dict=True)
+                                reward_tensor = reward_result["reward_tensor"]
+                                new_reward_extra_infos_dict = reward_result.get("reward_extra_info", {})
+                            except Exception as e:
+                                print(f"Error in reward_fn: {e}")
+                                reward_tensor = self.reward_fn(new_batch)
+                                new_reward_extra_infos_dict = {}
 
                         new_batch.batch["token_level_scores"] = reward_tensor
 

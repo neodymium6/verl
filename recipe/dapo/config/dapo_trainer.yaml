@@ -11,6 +11,9 @@ data:
 
 reward_model:
   reward_manager: dapo
+  # Parallel reward computation settings
+  enable_parallel: false  # Set to true to enable parallel reward computation
+  num_reward_workers: 4   # Number of Ray workers for parallel reward computation
   overlong_buffer: 
     enable: False # We try to avoid forgetting to set enable
     len: 0

@@ -186,3 +186,12 @@ def compute_reward_async(data: DataProto, config=None, tokenizer=None, reward_fn
         )
 
     return compute_reward(data, reward_fn)
+
+
+@ray.remote(num_cpus=4)
+def compute_reward_chunk(data_chunk: DataProto, reward_fn):
+    """
+    Compute rewards for a DataProto chunk in parallel.
+    This is meant to be run in a separate Ray worker for parallel processing.
+    """
+    return compute_reward(data_chunk, reward_fn)
