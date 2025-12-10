@@ -119,6 +119,7 @@ def default_compute_score(
 
     elif data_source == "livecodebench_dc":
         from . import deepcoder
+        # from . import deepcoder_remote as deepcoder
 
         res = deepcoder.compute_score(solution_str, ground_truth)
     else:
