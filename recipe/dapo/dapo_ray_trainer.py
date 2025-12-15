@@ -461,6 +461,12 @@ class RayDAPOTrainer(RayPPOTrainer):
 
                     batch.batch["response_mask"] = compute_response_mask(batch)
 
+                    if self.config.actor_rollout_ref.actor.policy_loss.loss_mode == "drpo":
+                        reorder_idx = (
+                            torch.arange(len(batch.batch)).view(-1, self.actor_rollout_wg.world_size).T.reshape(-1)
+                        )
+                        batch.reorder(reorder_idx)
+
                     # Balance the number of valid tokens across DP ranks.
                     # NOTE: This usually changes the order of data in the `batch`,
                     # which won't affect the advantage calculation (since it's based on uid),
