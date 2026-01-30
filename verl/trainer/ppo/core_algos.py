@@ -411,7 +411,7 @@ def compute_grpo_outcome_advantage(
             for i in range(bsz):
                 scores[i] = scores[i] * (length_reciprocal_list[i] / length_reciprocal_mean)
         elif custom_adv_config is not None and custom_adv_config.get("use_dual_agg", False):
-            alpha = custom_adv_config.get("dual_agg_alpha", 1.0)
+            # alpha = custom_adv_config.get("dual_agg_alpha", 1.0)
             beta = custom_adv_config.get("dual_agg_beta", 0.0)
 
             def harmonic_mean(tensor, power=1.0) -> torch.Tensor:
@@ -423,6 +423,17 @@ def compute_grpo_outcome_advantage(
                 numerator = len(tensor) * (mean_value**power)
                 denominator = torch.sum(powered_ratio)
                 return numerator / denominator
+
+            def get_alpha(
+                group_size: int,
+                num_correct: int,
+            ) -> float:
+                if custom_adv_config.get("dual_agg_adaptive_alpha", False):
+                    correct_ratio = num_correct / group_size
+                    adapted_alpha = correct_ratio
+                    return adapted_alpha
+                else:
+                    return custom_adv_config.get("dual_agg_alpha", 1.0)
 
             if custom_adv_config.get("dual_agg_batch_mean", False):
                 raise NotImplementedError
@@ -449,6 +460,8 @@ def compute_grpo_outcome_advantage(
                 for i in range(bsz):
                     id2length[index[i]].append(valid_length_list[i])
                     id2is_correct[index[i]].append(scores[i] > 0)
+                id2num_correct = {idx: sum(id2is_correct[idx]) for idx in id2is_correct}
+                id2group_size = {idx: len(id2is_correct[idx]) for idx in id2is_correct}
                 for idx in id2length:
                     length_tensor = torch.tensor(id2length[idx], dtype=torch.float32)
                     is_correct_tensor = torch.tensor(id2is_correct[idx], dtype=torch.bool)
@@ -457,21 +470,35 @@ def compute_grpo_outcome_advantage(
                         id2correct_length_mean[idx] = 0.0
                     elif custom_adv_config.get("dual_agg_use_harmonic_mean", False):
                         id2correct_length_mean[idx] = harmonic_mean(
-                            length_tensor[is_correct_tensor], power=alpha
+                            length_tensor[is_correct_tensor],
+                            power=get_alpha(id2group_size[idx], id2num_correct[idx]),
                         ).item()
                     else:
-                        id2correct_length_mean[idx] = torch.mean(length_tensor[is_correct_tensor] ** alpha).item()
+                        # id2correct_length_mean[idx] = torch.mean(length_tensor[is_correct_tensor] ** alpha).item()
+                        id2correct_length_mean[idx] = (
+                            torch.sum(length_tensor[is_correct_tensor])
+                            / torch.sum(
+                                length_tensor[is_correct_tensor]
+                                ** (1 - get_alpha(id2group_size[idx], id2num_correct[idx]))
+                            )
+                        ).item()
                     if torch.sum(is_wrong_tensor) == 0:
                         id2wrong_length_mean[idx] = 0.0
                     elif custom_adv_config.get("dual_agg_use_harmonic_mean", False):
                         id2wrong_length_mean[idx] = harmonic_mean(length_tensor[is_wrong_tensor], power=beta).item()
                     else:
-                        id2wrong_length_mean[idx] = torch.mean(length_tensor[is_wrong_tensor] ** beta).item()
+                        # id2wrong_length_mean[idx] = torch.mean(length_tensor[is_wrong_tensor] ** beta).item()
+                        id2wrong_length_mean[idx] = (
+                            torch.sum(length_tensor[is_wrong_tensor])
+                            / torch.sum(length_tensor[is_wrong_tensor] ** (1 - beta))
+                        ).item()
                 raw_scale_factors = []
                 is_pos_score = scores > 0
                 for i in range(bsz):
                     if scores[i] > 0:
-                        scale_factor = id2correct_length_mean[index[i]] / (valid_length_list[i] ** alpha)
+                        scale_factor = id2correct_length_mean[index[i]] / (
+                            valid_length_list[i] ** get_alpha(id2group_size[index[i]], id2num_correct[index[i]])
+                        )
                     else:
                         scale_factor = id2wrong_length_mean[index[i]] / (valid_length_list[i] ** beta)
                     clip_factor = custom_adv_config.get("dual_agg_clip_factor", None)
