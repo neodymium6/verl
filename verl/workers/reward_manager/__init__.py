@@ -18,6 +18,8 @@ from .dapo import DAPORewardManager
 from .dapo01 import DAPO01RewardManager
 from .naive import NaiveRewardManager
 from .prime import PrimeRewardManager
+from .alp import ALPRewardManager
+from .roo_lp import RooLpRewardManager
 
 # Note(haibin.lin): no need to include all reward managers here in case of complicated dependencies
 __all__ = [
@@ -28,4 +30,6 @@ __all__ = [
     "PrimeRewardManager",
     "register",
     "get_reward_manager_cls",
+    "ALPRewardManager",
+    "RooLpRewardManager",
 ]

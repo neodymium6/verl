@@ -151,6 +151,8 @@ class TaskRunner:
             0,
             max_resp_len=config.data.max_response_length,
             overlong_buffer_cfg=config.reward_model.overlong_buffer,
+            roo_lp_cfg=config.reward_model.get("roo_lp_cfg"),
+            alp_cfg=config.reward_model.get("alp_cfg"),
         )
 
         # Note that we always use function-based RM for validation
@@ -160,6 +162,8 @@ class TaskRunner:
             1,
             max_resp_len=config.data.max_response_length,
             overlong_buffer_cfg=config.reward_model.overlong_buffer,
+            roo_lp_cfg=config.reward_model.get("roo_lp_cfg"),
+            alp_cfg=config.reward_model.get("alp_cfg"),
         )
         resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=mapping)
 

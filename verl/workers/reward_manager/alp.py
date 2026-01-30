@@ -14,6 +14,7 @@
 
 from collections import defaultdict
 
+import numpy as np
 import torch
 
 from verl import DataProto
@@ -85,8 +86,8 @@ def analyze_response_repetition(
     return res
 
 
-@register("dapo01")
-class DAPO01RewardManager(AbstractRewardManager):
+@register("alp")
+class ALPRewardManager(AbstractRewardManager):
     """The reward manager."""
 
     def __init__(
@@ -96,23 +97,18 @@ class DAPO01RewardManager(AbstractRewardManager):
         compute_score=None,
         reward_fn_key="data_source",
         max_resp_len=None,
-        overlong_buffer_cfg=None,
+        alp_cfg=None,
         **kwargs,
     ) -> None:
         self.tokenizer = tokenizer
         self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
         self.compute_score = compute_score or default_compute_score
         self.reward_fn_key = reward_fn_key
-        self.overlong_buffer_cfg = overlong_buffer_cfg
         self.max_resp_len = max_resp_len
-
-        if self.overlong_buffer_cfg is not None:
-            assert self.max_resp_len is not None, (
-                f"max_resp_len must be provided if {overlong_buffer_cfg=}, but got None"
-            )
-            assert self.max_resp_len >= self.overlong_buffer_cfg.len, (
-                "max_resp_len must be larger than overlong_buffer.len"
-            )
+        self.alp_cfg = alp_cfg
+        assert self.alp_cfg is not None, "alp_cfg must be provided"
+        self.alp_beta = self.alp_cfg.get("beta", 1e-8)
+        # TODO: assert using with roo advantage estimator
 
     def __call__(self, data: DataProto, return_dict: bool = False):
         """We will expand this function gradually based on the available datasets"""
@@ -130,6 +126,9 @@ class DAPO01RewardManager(AbstractRewardManager):
         reward_extra_info = defaultdict(list)
 
         already_print_data_sources = {}
+        scores_list = []
+        uid2is_correct: dict[str, list[bool]] = defaultdict(list)
+        valid_response_length_list: list[int] = []
 
         for i in range(len(data)):
             data_item = data[i]  # DataProtoItem
@@ -144,6 +143,7 @@ class DAPO01RewardManager(AbstractRewardManager):
             response_ids = data_item.batch["responses"]
             valid_response_length = data_item.batch["attention_mask"][prompt_length:].sum()
             valid_response_ids = response_ids[:valid_response_length]
+            valid_response_length_list.append(valid_response_length.item())
 
             n_values = [3, 5, 10]
             top_ks = [1, 5, 10]
@@ -189,28 +189,12 @@ class DAPO01RewardManager(AbstractRewardManager):
                 score = result
                 reward_extra_info["acc"].append(score)
 
-            reward = score
-
-            if self.overlong_buffer_cfg.enable:
-                overlong_buffer_len = self.overlong_buffer_cfg.len
-                expected_len = self.max_resp_len - overlong_buffer_len
-                exceed_len = valid_response_length - expected_len
-                overlong_penalty_factor = self.overlong_buffer_cfg.penalty_factor
-                if overlong_buffer_len == 0:
-                    overlong_reward = 0
-                else:
-                    overlong_reward = min(-exceed_len / overlong_buffer_len * overlong_penalty_factor, 0)
-                overlong_reward = (overlong_reward + 1) / 2  # scale to [0, 1/2]
-                reward += overlong_reward
-                reward_extra_info["overlong_reward"].append(overlong_reward)
-                reward_extra_info["overlong"].append(overlong_reward < 1 / 2)
-            reward_extra_info["total_reward"].append(reward)
-
-            reward_tensor[i, valid_response_length - 1] = reward
-
+            scores_list.append(score)
+            uid = data_item.non_tensor_batch.get("uid", None)
+            assert uid is not None, "uid must be provided"
+            uid2is_correct[uid].append(score == 1)
             if data_source not in already_print_data_sources:
                 already_print_data_sources[data_source] = 0
-
             if already_print_data_sources[data_source] < self.num_examine:
                 already_print_data_sources[data_source] += 1
                 print("[prompt]", prompt_str)
@@ -221,6 +205,19 @@ class DAPO01RewardManager(AbstractRewardManager):
                         print(f"[{key}]", value)
                 else:
                     print("[score]", score)
+
+        for i in range(len(data)):
+            score = scores_list[i]
+            data_item = data[i]  # DataProtoItem
+            uid = data_item.non_tensor_batch.get("uid", None)
+            assert uid is not None, "uid must be provided"
+            pass_rate = float(np.mean(uid2is_correct[uid]))
+            maxed_pass_rate = max(pass_rate, 1 / len(uid2is_correct[uid]))
+            overlong_reward = -self.alp_beta * valid_response_length_list[i] * maxed_pass_rate
+            reward_extra_info["overlong_reward"].append(overlong_reward)
+            reward = score + overlong_reward
+            reward_extra_info["total_reward"].append(reward)
+            reward_tensor[i, valid_response_length_list[i] - 1] = reward
 
         if return_dict:
             return {

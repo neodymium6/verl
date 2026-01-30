@@ -19,6 +19,10 @@ reward_model:
     len: 0
     penalty_factor: 0.0
     log: False
+  roo_lp_cfg:
+    alpha: 0.1
+  alp_cfg:
+    beta: 1e-8
 
 algorithm:
   filter_groups:
