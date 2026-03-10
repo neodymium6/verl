@@ -31,6 +31,7 @@ from omegaconf import DictConfig
 import verl.utils.torch_functional as verl_F
 from verl.protocol import DataProto
 from verl.trainer.config import AlgoConfig
+from verl.trainer.ppo.dual_agg import apply_dual_agg_general
 from verl.utils.import_utils import deprecated
 from verl.workers.config import ActorConfig
 
@@ -410,7 +411,23 @@ def compute_grpo_outcome_advantage(
             length_reciprocal_mean = float(np.mean(length_reciprocal_list))
             for i in range(bsz):
                 scores[i] = scores[i] * (length_reciprocal_list[i] / length_reciprocal_mean)
-        elif custom_adv_config is not None and custom_adv_config.get("use_dual_agg", False):
+        elif (
+            custom_adv_config is not None
+            and custom_adv_config.get("use_dual_agg", False)
+            and custom_adv_config.get("dual_agg_impl", "legacy") == "general"
+        ):
+            scores, metrics = apply_dual_agg_general(
+                scores=scores,
+                response_mask=response_mask,
+                index=index,
+                custom_adv_config=custom_adv_config,
+                metrics=metrics,
+            )
+        elif (
+            custom_adv_config is not None
+            and custom_adv_config.get("use_dual_agg", False)
+            and custom_adv_config.get("dual_agg_impl", "legacy") == "legacy"
+        ):
             # alpha = custom_adv_config.get("dual_agg_alpha", 1.0)
             beta = custom_adv_config.get("dual_agg_beta", 0.0)
 
@@ -539,6 +556,8 @@ def compute_grpo_outcome_advantage(
                         ).items()
                     }
                 )
+        elif custom_adv_config is not None and custom_adv_config.get("use_dual_agg", False):
+            raise ValueError(f"unknown dual_agg_impl: {custom_adv_config.get('dual_agg_impl')}")
 
         scores = scores.unsqueeze(-1) * response_mask
 

@@ -34,13 +34,18 @@ algorithm:
     use_delta_l: False
     delta_l_alpha: 1.0
     use_dual_agg: False
+    dual_agg_impl: legacy
+    dual_agg_g_type: null
     dual_agg_batch_mean: False
     dual_agg_clip_factor: 2.0
     dual_agg_alpha: 1.0
     dual_agg_beta: 0.0
+    dual_agg_rloo_alpha: 0.1
     dual_agg_use_harmonic_mean: False
     dual_agg_adaptive_alpha: False
     use_virtual_correct: False
+    dual_agg_alp_beta: 1e-3
+    dual_agg_alp_eps: 0.05
   use_prompt_mean_adv: False
   filter_sample:
     enable: False
