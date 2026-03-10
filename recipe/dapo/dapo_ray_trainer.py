@@ -53,26 +53,45 @@ class RayDAPOTrainer(RayPPOTrainer):
     Note that this trainer runs on the driver process on a single CPU/GPU node.
     """
 
-    def _check_reward_manager_parallel_safety(self):
+    def _check_reward_manager_parallel_safety(self, num_workers: int):
         """
         Check if the current reward manager is safe for parallel processing.
-        Only allow specific reward managers that are known to be parallel-safe.
+        Allow reward managers that are unconditionally safe or conditionally safe
+        under the current config.
         """
-        # List of reward managers that are safe for parallel processing
-        PARALLEL_SAFE_REWARD_MANAGERS = {
-            "dapo01",  # Safe: stateless computation, no global state
-            "dapo",  # Safe: stateless computation, no global state
+        parallel_safety_checks = {
+            "dapo01": lambda cfg: True,
+            "dapo": lambda cfg: True,
+            "alp": lambda cfg: cfg.data.get("gen_batch_size", cfg.data.train_batch_size)
+            % cfg.reward_model.get("num_reward_workers", 4)
+            == 0,
+            "roo-lp": lambda cfg: cfg.data.get("gen_batch_size", cfg.data.train_batch_size)
+            % cfg.reward_model.get("num_reward_workers", 4)
+            == 0,
         }
 
         reward_manager_name = self.config.reward_model.reward_manager
+        configured_num_workers = self.config.reward_model.get("num_reward_workers", 4)
+        assert num_workers == configured_num_workers, (
+            f"num_workers mismatch: got {num_workers}, but config.reward_model.num_reward_workers="
+            f"{configured_num_workers}"
+        )
 
-        if reward_manager_name not in PARALLEL_SAFE_REWARD_MANAGERS:
+        if reward_manager_name not in parallel_safety_checks:
             raise AssertionError(
                 f"Reward manager '{reward_manager_name}' has not been verified for parallel safety. "
-                f"Only the following reward managers are approved for parallel processing: "
-                f"{sorted(PARALLEL_SAFE_REWARD_MANAGERS)}. "
-                f"To use '{reward_manager_name}' with parallel processing, please verify its safety and add it to "
-                f"PARALLEL_SAFE_REWARD_MANAGERS in _check_reward_manager_parallel_safety()."
+                f"Only the following reward managers have parallel safety checks: "
+                f"{sorted(parallel_safety_checks)}. "
+                f"To use '{reward_manager_name}' with parallel processing, please add a safety check in "
+                f"_check_reward_manager_parallel_safety()."
+            )
+
+        if not parallel_safety_checks[reward_manager_name](self.config):
+            raise AssertionError(
+                f"Reward manager '{reward_manager_name}' is not parallel-safe under the current config. "
+                f"For '{reward_manager_name}', this usually means "
+                f"data.gen_batch_size (or data.train_batch_size if gen_batch_size is unset) must be divisible by "
+                f"reward_model.num_reward_workers={configured_num_workers}."
             )
 
     def _compute_rewards_parallel(self, new_batch: DataProto, num_workers: int = 4):
@@ -87,7 +106,7 @@ class RayDAPOTrainer(RayPPOTrainer):
             Tuple of (reward_tensor, reward_extra_infos_dict)
         """
         # Safety check: ensure reward manager is parallel-safe
-        self._check_reward_manager_parallel_safety()
+        self._check_reward_manager_parallel_safety(num_workers=num_workers)
         # Split DataProto into chunks for parallel processing
         data_chunks = new_batch.chunk(chunks=num_workers)
 
